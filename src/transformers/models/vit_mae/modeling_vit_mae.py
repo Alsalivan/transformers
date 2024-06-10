@@ -137,7 +137,7 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, add_cls_token=False):
     Args:
         embed_dim (`int`):
             Embedding dimension.
-        grid_size (`int`):
+        grid_size (`tuple`):
             The grid height and width.
         add_cls_token (`bool`, *optional*, defaults to `False`):
             Whether or not to add a classification (CLS) token.
@@ -146,12 +146,12 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, add_cls_token=False):
         (`torch.FloatTensor` of shape (grid_size*grid_size, embed_dim) or (1+grid_size*grid_size, embed_dim): the
         position embeddings (with or without classification token)
     """
-    grid_h = np.arange(grid_size, dtype=np.float32)
-    grid_w = np.arange(grid_size, dtype=np.float32)
+    grid_h = np.arange(grid_size[0], dtype=np.float32)
+    grid_w = np.arange(grid_size[1], dtype=np.float32)
     grid = np.meshgrid(grid_w, grid_h)  # here w goes first
     grid = np.stack(grid, axis=0)
 
-    grid = grid.reshape([2, 1, grid_size, grid_size])
+    grid = grid.reshape([2, 1, grid_size[0], grid_size[1]])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if add_cls_token:
         pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
@@ -203,6 +203,7 @@ class ViTMAEEmbeddings(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
         self.patch_embeddings = ViTMAEPatchEmbeddings(config)
         self.num_patches = self.patch_embeddings.num_patches
+        self.grid_size = self.patch_embeddings.grid_size
         # fixed sin-cos embedding
         self.position_embeddings = nn.Parameter(
             torch.zeros(1, self.num_patches + 1, config.hidden_size), requires_grad=False
@@ -213,7 +214,7 @@ class ViTMAEEmbeddings(nn.Module):
     def initialize_weights(self):
         # initialize (and freeze) position embeddings by sin-cos embedding
         pos_embed = get_2d_sincos_pos_embed(
-            self.position_embeddings.shape[-1], int(self.patch_embeddings.num_patches**0.5), add_cls_token=True
+            self.position_embeddings.shape[-1], self.grid_size, add_cls_token=True
         )
         self.position_embeddings.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
@@ -284,14 +285,18 @@ class ViTMAEPatchEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         image_size, patch_size = config.image_size, config.patch_size
+        
         num_channels, hidden_size = config.num_channels, config.hidden_size
         image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
         patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
-        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
+        grid_size = (image_size[0] // patch_size[0], image_size[1] // patch_size[1])
+        num_patches = grid_size[0] * grid_size[1]
+
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_channels = num_channels
         self.num_patches = num_patches
+        self.grid_size = grid_size
 
         self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
 
@@ -715,7 +720,7 @@ class ViTMAEModel(ViTMAEPreTrainedModel):
 
 
 class ViTMAEDecoder(nn.Module):
-    def __init__(self, config, num_patches):
+    def __init__(self, config, num_patches, grid_size):
         super().__init__()
         self.decoder_embed = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
@@ -734,16 +739,16 @@ class ViTMAEDecoder(nn.Module):
 
         self.decoder_norm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
         self.decoder_pred = nn.Linear(
-            config.decoder_hidden_size, config.patch_size**2 * config.num_channels, bias=True
+            config.decoder_hidden_size, config.patch_size[0] * config.patch_size[1] * config.num_channels, bias=True
         )  # encoder to decoder
         self.gradient_checkpointing = False
         self.config = config
-        self.initialize_weights(num_patches)
+        self.initialize_weights(grid_size)
 
-    def initialize_weights(self, num_patches):
+    def initialize_weights(self, grid_size):
         # initialize (and freeze) position embeddings by sin-cos embedding
         decoder_pos_embed = get_2d_sincos_pos_embed(
-            self.decoder_pos_embed.shape[-1], int(num_patches**0.5), add_cls_token=True
+            self.decoder_pos_embed.shape[-1], grid_size, add_cls_token=True
         )
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
 
@@ -831,7 +836,13 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         self.config = config
 
         self.vit = ViTMAEModel(config)
-        self.decoder = ViTMAEDecoder(config, num_patches=self.vit.embeddings.num_patches)
+        self.grid_size = self.vit.embeddings.grid_size
+
+        self.decoder = ViTMAEDecoder(
+            config,
+            num_patches=self.vit.embeddings.num_patches,
+            grid_size=self.grid_size,
+        )
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -859,8 +870,6 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         """
         patch_size, num_channels = self.config.patch_size, self.config.num_channels
         # sanity checks
-        if (pixel_values.shape[2] != pixel_values.shape[3]) or (pixel_values.shape[2] % patch_size != 0):
-            raise ValueError("Make sure the pixel values have a squared size that is divisible by the patch size")
         if pixel_values.shape[1] != num_channels:
             raise ValueError(
                 "Make sure the number of channels of the pixel values is equal to the one set in the configuration"
@@ -868,20 +877,21 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
 
         # patchify
         batch_size = pixel_values.shape[0]
-        num_patches_one_direction = pixel_values.shape[2] // patch_size
+        num_patches_one_direction, num_patches_another_direction = self.grid_size
+
         patchified_pixel_values = pixel_values.reshape(
-            batch_size, num_channels, num_patches_one_direction, patch_size, num_patches_one_direction, patch_size
+            batch_size, num_channels, num_patches_one_direction, patch_size[0], num_patches_another_direction, patch_size[1]
         )
         patchified_pixel_values = torch.einsum("nchpwq->nhwpqc", patchified_pixel_values)
         patchified_pixel_values = patchified_pixel_values.reshape(
-            batch_size, num_patches_one_direction * num_patches_one_direction, patch_size**2 * num_channels
+            batch_size, num_patches_one_direction * num_patches_another_direction, patch_size[0] * patch_size[1] * num_channels
         )
         return patchified_pixel_values
 
     def unpatchify(self, patchified_pixel_values):
         """
         Args:
-            patchified_pixel_values (`torch.FloatTensor` of shape `(batch_size, num_patches, patch_size**2 * num_channels)`:
+            patchified_pixel_values (`torch.FloatTensor` of shape `(batch_size, num_patches, patch_size[0] * patch_size[1] * num_channels)`:
                 Patchified pixel values.
 
         Returns:
@@ -889,27 +899,24 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
                 Pixel values.
         """
         patch_size, num_channels = self.config.patch_size, self.config.num_channels
-        num_patches_one_direction = int(patchified_pixel_values.shape[1] ** 0.5)
-        # sanity check
-        if num_patches_one_direction**2 != patchified_pixel_values.shape[1]:
-            raise ValueError("Make sure that the number of patches can be squared")
+        num_patches_one_direction, num_patches_another_direction = self.grid_size
 
         # unpatchify
         batch_size = patchified_pixel_values.shape[0]
         patchified_pixel_values = patchified_pixel_values.reshape(
             batch_size,
             num_patches_one_direction,
-            num_patches_one_direction,
-            patch_size,
-            patch_size,
+            num_patches_another_direction,
+            patch_size[0],
+            patch_size[1],
             num_channels,
         )
         patchified_pixel_values = torch.einsum("nhwpqc->nchpwq", patchified_pixel_values)
         pixel_values = patchified_pixel_values.reshape(
             batch_size,
             num_channels,
-            num_patches_one_direction * patch_size,
-            num_patches_one_direction * patch_size,
+            num_patches_one_direction * patch_size[0],
+            num_patches_another_direction * patch_size[1],
         )
         return pixel_values
 
@@ -924,19 +931,30 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
                 Tensor indicating which patches are masked (1) and which are not (0).
 
         Returns:
-            `torch.FloatTensor`: Pixel reconstruction loss.
+            `torch.FloatTensor`: Pixel reconstruction loss with optional NCC regularization.
         """
         target = self.patchify(pixel_values)
         if self.config.norm_pix_loss:
             mean = target.mean(dim=-1, keepdim=True)
             var = target.var(dim=-1, keepdim=True)
-            target = (target - mean) / (var + 1.0e-6) ** 0.5
+            target = (target - mean) / (var + 1e-12) ** 0.5
 
+        # Compute reconstruction loss
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        reconstruction_loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
 
-        loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return loss
+        # Compute NCC regularization
+        imgs_hat = self.unpatchify(pred)
+        target_normalized = (pixel_values - pixel_values.mean(dim=-1, keepdim=True)) / (pixel_values.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
+        pred_normalized = (imgs_hat - imgs_hat.mean(dim=-1, keepdim=True)) / (imgs_hat.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
+
+        cross_corrs = (1.0 / (pixel_values.shape[-1] - 1)) * torch.sum(target_normalized * pred_normalized, dim=-1)
+        ncc = cross_corrs.mean()
+
+        # Combine losses
+        total_loss = (1 - self.config.ncc_weight) * reconstruction_loss + self.config.ncc_weight * (1 - ncc)
+        return total_loss
 
     @add_start_docstrings_to_model_forward(VIT_MAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=ViTMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)

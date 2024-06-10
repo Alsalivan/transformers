@@ -24,6 +24,7 @@ from typing import Optional, Set, Tuple, Union
 import numpy as np
 import torch
 import torch.utils.checkpoint
+import torch.nn.functional as F
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
@@ -40,6 +41,7 @@ from ...utils import (
 )
 from ...utils.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .configuration_videomae import VideoMAEConfig
+from ...models.vit_mae.modeling_vit_mae import ViTMAEModelOutput, ViTMAEForPreTrainingOutput
 
 
 logger = logging.get_logger(__name__)
@@ -100,17 +102,74 @@ class VideoMAEForPreTrainingOutput(ModelOutput):
 # sin-cos position encoding
 # https://github.com/jadore801120/attention-is-all-you-need-pytorch/blob/master/transformer/Models.py#L31
 def get_sinusoid_encoding_table(n_position, d_hid):
-    """Sinusoid position encoding table"""
+    """Generate a sinusoid encoding table with PyTorch.
 
-    # TODO: make it with torch instead of numpy
-    def get_position_angle_vec(position):
-        return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
+    Args:
+        n_position (int): Number of positions.
+        d_hid (int): Dimensionality of the hidden layer.
 
-    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
-    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
+    Returns:
+        torch.Tensor: A tensor containing the positional encodings.
+    """
+    position = torch.arange(n_position).unsqueeze(1).float()
+    div_term = torch.pow(10000, torch.arange(0, d_hid, 2).float() / (d_hid / 2))
+    angle_rads = position / div_term.unsqueeze(0)
 
-    return torch.FloatTensor(sinusoid_table).unsqueeze(0)
+    sinusoid_table = torch.zeros(n_position, d_hid)
+    sinusoid_table[:, 0::2] = torch.sin(angle_rads)  # Apply sin to even indices: 2i
+    sinusoid_table[:, 1::2] = torch.cos(angle_rads)  # Apply cos to odd indices: 2i+1
+
+    return sinusoid_table.unsqueeze(0)
+
+def build_3d_sincos_position_embedding(grid_size, embed_dim):
+    """
+    Create 3D sinusoidal position embeddings adapted for specified grid size in video data.
+    
+    Args:
+        grid_size (tuple): Tuple of three integers (depth, x, y) of the grid.
+        embed_dim (int): The dimensionality of the embeddings.
+
+    Returns:
+        torch.Tensor: A tensor containing the positional encodings, shape [1, total_patches, embed_dim].
+    """
+    # Calculate the number of channels needed
+    channels = embed_dim // 6 * 2
+    remainder = embed_dim % 6
+    if remainder > 0:
+        channels += 2
+
+    # Create the inverse frequency tensor
+    inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
+
+    d, x, y = grid_size
+    pos_d = torch.arange(d, dtype=torch.float32)
+    pos_x = torch.arange(x, dtype=torch.float32)
+    pos_y = torch.arange(y, dtype=torch.float32)
+
+    sin_inp_d = torch.einsum('i,j->ij', pos_d, inv_freq)
+    sin_inp_x = torch.einsum('i,j->ij', pos_x, inv_freq)
+    sin_inp_y = torch.einsum('i,j->ij', pos_y, inv_freq)
+
+    def get_emb(sin_inp):
+        """
+        Gets a base embedding for one dimension with sin and cos intertwined.
+        """
+        emb = torch.stack((sin_inp.sin(), sin_inp.cos()), dim=-1)
+        return torch.flatten(emb, -2, -1)
+
+    emb_d = get_emb(sin_inp_d).unsqueeze(1).unsqueeze(1)
+    emb_x = get_emb(sin_inp_x).unsqueeze(1)
+    emb_y = get_emb(sin_inp_y)
+
+    emb = torch.zeros((d, x, y, channels * 3), dtype=torch.float32)
+    emb[:, :, :, :channels] = emb_d
+    emb[:, :, :, channels:2*channels] = emb_x
+    emb[:, :, :, 2*channels:] = emb_y
+
+    if embed_dim % 6 != 0:
+        emb = emb[:, :, :, :embed_dim]
+
+    return emb.view(1, d * x * y, embed_dim)
 
 
 class VideoMAEEmbeddings(nn.Module):
@@ -124,25 +183,68 @@ class VideoMAEEmbeddings(nn.Module):
 
         self.patch_embeddings = VideoMAEPatchEmbeddings(config)
         self.num_patches = self.patch_embeddings.num_patches
+        self.grid_size = (config.num_frames // config.tubelet_size,
+                          config.image_size // config.patch_size,
+                          config.image_size // config.patch_size)
+        
         # fixed sin-cos embedding
-        self.position_embeddings = get_sinusoid_encoding_table(self.num_patches, config.hidden_size)
-        self.config = config
+        if config.use_learnable_pos_emb:
+            self.position_embeddings = nn.Parameter(torch.zeros(1, self.num_patches, config.hidden_size))
+        else:
+            self.position_embeddings = build_3d_sincos_position_embedding(grid_size=self.grid_size, embed_dim=config.hidden_size)
+            self.position_embeddings.requires_grad_(False)
 
-    def forward(self, pixel_values, bool_masked_pos):
-        # create patch embeddings
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.config = config
+    
+    def random_masking(self, sequence, noise=None):
+        """
+        Perform per-sample random masking by per-sample shuffling. Per-sample shuffling is done by argsort random
+        noise.
+
+        Args:
+            sequence (`torch.LongTensor` of shape `(batch_size, sequence_length, dim)`)
+            noise (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*) which is
+                mainly used for testing purposes to control randomness and maintain the reproducibility
+        """
+        batch_size, seq_length, dim = sequence.shape
+        len_keep = int(seq_length * (1 - self.config.mask_ratio))
+
+        if noise is None:
+            noise = torch.rand(batch_size, seq_length, device=sequence.device)  # noise in [0, 1]
+
+        # sort noise for each sample
+        ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+        # keep the first subset
+        ids_keep = ids_shuffle[:, :len_keep]
+        sequence_unmasked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
+
+        # generate the binary mask: 0 is keep, 1 is remove
+        mask = torch.ones([batch_size, seq_length], device=sequence.device)
+        mask[:, :len_keep] = 0
+        # unshuffle to get the binary mask
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+
+        return sequence_unmasked, mask, ids_restore
+
+    def forward(self, pixel_values, apply_masking=True):
         embeddings = self.patch_embeddings(pixel_values)
 
         # add position embeddings
-        embeddings = embeddings + self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach()
+        expanded_position_embeddings = self.position_embeddings.expand(embeddings.shape[0], -1, -1).type_as(embeddings).to(embeddings.device).clone().detach()
+        embeddings = embeddings + expanded_position_embeddings
 
-        # only keep visible patches
-        # ~bool_masked_pos means visible
-        if bool_masked_pos is not None:
-            batch_size, _, num_channels = embeddings.shape
-            embeddings = embeddings[~bool_masked_pos]
-            embeddings = embeddings.reshape(batch_size, -1, num_channels)
+        # masking: length -> length * config.mask_rati[o
+        if apply_masking:
+            embeddings, mask, ids_restore = self.random_masking(embeddings)
+        else:
+            mask, ids_restore = None, None
 
-        return embeddings
+        embeddings = self.dropout(embeddings)
+
+        return embeddings, mask, ids_restore
 
 
 class VideoMAEPatchEmbeddings(nn.Module):
@@ -158,45 +260,67 @@ class VideoMAEPatchEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        image_size = config.image_size
-        patch_size = config.patch_size
         num_channels = config.num_channels
         hidden_size = config.hidden_size
         num_frames = config.num_frames
-        tubelet_size = config.tubelet_size
 
-        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
-        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.tubelet_size = int(tubelet_size)
+        self.image_size = config.image_size
+        self.patch_size = config.patch_size
+        self.tubelet_size = int(config.tubelet_size)
+
         num_patches = (
-            (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0]) * (num_frames // self.tubelet_size)
+            (self.image_size // self.patch_size) * (self.image_size // self.patch_size) * (num_frames // self.tubelet_size)
         )
         self.num_channels = num_channels
         self.num_patches = num_patches
+
         self.projection = nn.Conv3d(
             in_channels=num_channels,
             out_channels=hidden_size,
-            kernel_size=(self.tubelet_size, patch_size[0], patch_size[1]),
-            stride=(self.tubelet_size, patch_size[0], patch_size[1]),
+            kernel_size=(self.tubelet_size, self.patch_size, self.patch_size),
+            stride=(self.tubelet_size, self.patch_size, self.patch_size),
         )
 
     def forward(self, pixel_values):
-        batch_size, num_frames, num_channels, height, width = pixel_values.shape
-        if num_channels != self.num_channels:
-            raise ValueError(
-                "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
-            )
-        if height != self.image_size[0] or width != self.image_size[1]:
-            raise ValueError(
-                f"Input image size ({height}*{width}) doesn't match model ({self.image_size[0]}*{self.image_size[1]})."
-            )
-        # permute to (batch_size, num_channels, num_frames, height, width)
+        # permute from (batch_size, num_frames, num_channels, height, width) to (batch_size, num_channels, num_frames, height, width)
         pixel_values = pixel_values.permute(0, 2, 1, 3, 4)
         embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return embeddings
 
+
+class CosAttention(nn.Module):
+    def __init__(self, config: VideoMAEConfig, qk_scale=None) -> None:
+        super().__init__()
+
+        self.num_attention_heads = config.num_attention_heads
+        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.scale = nn.Parameter(torch.log(10 * torch.ones((self.num_attention_heads, 1, 1)))) if qk_scale is None else qk_scale
+        self.qkv = nn.Linear(config.hidden_size, self.all_head_size * 3, bias=config.qkv_bias)
+
+        self.attn_drop = nn.Dropout(config.attention_probs_dropout_prob)
+
+    def forward(self, x, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False):
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_attention_heads, -1).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
+
+        if head_mask is not None:
+            # Apply head mask after computing the attention scores
+            attn = attn * head_mask
+
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
+
+        if output_attentions:
+            return (x, attn)
+        return (x, )
+    
 
 class VideoMAESelfAttention(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
@@ -211,35 +335,29 @@ class VideoMAESelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
-        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
-        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+        self.query = nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
-        if config.qkv_bias:
-            self.q_bias = nn.Parameter(torch.zeros(self.all_head_size))
-            self.v_bias = nn.Parameter(torch.zeros(self.all_head_size))
-        else:
-            self.q_bias = None
-            self.v_bias = None
+        self.attn_dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
-        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+        self.softmax = nn.Softmax(dim=-1)
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(new_x_shape)
+        x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
     def forward(
         self, hidden_states, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        k_bias = torch.zeros_like(self.v_bias, requires_grad=False) if self.q_bias is not None else None
-        keys = nn.functional.linear(input=hidden_states, weight=self.key.weight, bias=k_bias)
-        values = nn.functional.linear(input=hidden_states, weight=self.value.weight, bias=self.v_bias)
-        queries = nn.functional.linear(input=hidden_states, weight=self.query.weight, bias=self.q_bias)
+        mixed_query_layer = self.query(hidden_states)
+        mixed_key_layer = self.key(hidden_states)
+        mixed_value_layer = self.value(hidden_states)
 
-        key_layer = self.transpose_for_scores(keys)
-        value_layer = self.transpose_for_scores(values)
-        query_layer = self.transpose_for_scores(queries)
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+        key_layer = self.transpose_for_scores(mixed_key_layer)
+        value_layer = self.transpose_for_scores(mixed_value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -247,21 +365,21 @@ class VideoMAESelfAttention(nn.Module):
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
         # Normalize the attention scores to probabilities.
-        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        attention_probs = self.softmax(attention_scores)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
-        attention_probs = self.dropout(attention_probs)
+        attention_probs = self.attn_dropout(attention_probs)
 
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
         context_layer = torch.matmul(attention_probs, value_layer)
-
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(new_context_layer_shape)
+        context_layer = context_layer.view(*new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
@@ -280,8 +398,8 @@ class VideoMAESelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(input_tensor)
         hidden_states = self.dropout(hidden_states)
 
         return hidden_states
@@ -291,7 +409,10 @@ class VideoMAESelfOutput(nn.Module):
 class VideoMAEAttention(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
-        self.attention = VideoMAESelfAttention(config)
+        if config.attention_type == 'cosine':
+            self.attention = CosAttention(config)
+        elif config.attention_type == 'self_attention':
+            self.attention = VideoMAESelfAttention(config)
         self.output = VideoMAESelfOutput(config)
         self.pruned_heads = set()
 
@@ -321,10 +442,9 @@ class VideoMAEAttention(nn.Module):
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
         self_outputs = self.attention(hidden_states, head_mask, output_attentions)
 
-        attention_output = self.output(self_outputs[0], hidden_states)
+        attention_output = self.output(self_outputs[0])
 
-        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
-        return outputs
+        return (attention_output, self_outputs[1]) if output_attentions else (attention_output, )
 
 
 # Copied from transformers.models.vit.modeling_vit.ViTIntermediate ViT->VideoMAE
@@ -332,6 +452,7 @@ class VideoMAEIntermediate(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
+        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -340,6 +461,7 @@ class VideoMAEIntermediate(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
+        # hidden_states = self.dropout(hidden_states)
 
         return hidden_states
 
@@ -386,19 +508,20 @@ class VideoMAELayer(nn.Module):
             output_attentions=output_attentions,
         )
         attention_output = self_attention_outputs[0]
-        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
         hidden_states = attention_output + hidden_states
 
-        # in VideoMAE, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
         layer_output = self.intermediate(layer_output)
 
         # second residual connection is done here
         layer_output = self.output(layer_output, hidden_states)
 
-        outputs = (layer_output,) + outputs
+        if output_attentions:
+            outputs = (layer_output, self_attention_outputs[1:])
+        else:
+            outputs = (layer_output, )
 
         return outputs
 
@@ -468,16 +591,21 @@ class VideoMAEPreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         """Initialize the weights"""
-        if isinstance(module, (nn.Linear, nn.Conv3d)):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Conv3d):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif hasattr(module, 'mask_token'):
+            nn.init.normal_(module.mask_token, mean=0.0, std=self.config.initializer_range)
 
 VIDEOMAE_START_DOCSTRING = r"""
     This model is a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass. Use it
@@ -495,6 +623,9 @@ VIDEOMAE_INPUTS_DOCSTRING = r"""
         pixel_values (`torch.FloatTensor` of shape `(batch_size, num_frames, num_channels, height, width)`):
             Pixel values. Pixel values can be obtained using [`AutoImageProcessor`]. See
             [`VideoMAEImageProcessor.__call__`] for details.
+        
+        apply_masking (bool`):
+            Apply random patch masking or not
 
         head_mask (`torch.FloatTensor` of shape `(num_heads,)` or `(num_layers, num_heads)`, *optional*):
             Mask to nullify selected heads of the self-attention modules. Mask values selected in `[0, 1]`:
@@ -545,11 +676,11 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
             self.encoder.layer[layer].attention.prune_heads(heads)
 
     @add_start_docstrings_to_model_forward(VIDEOMAE_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=BaseModelOutput, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(output_type=ViTMAEModelOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values: torch.FloatTensor,
-        bool_masked_pos: Optional[torch.BoolTensor] = None,
+        apply_masking: bool = True, 
         head_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -649,7 +780,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        embedding_output = self.embeddings(pixel_values, bool_masked_pos)
+        embedding_output, mask, ids_restore = self.embeddings(pixel_values, apply_masking=apply_masking)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -663,17 +794,19 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
             sequence_output = self.layernorm(sequence_output)
 
         if not return_dict:
-            return (sequence_output,) + encoder_outputs[1:]
+            return (sequence_output, mask, ids_restore) + encoder_outputs[1:]
 
-        return BaseModelOutput(
+        return ViTMAEModelOutput(
             last_hidden_state=sequence_output,
+            mask=mask,
+            ids_restore=ids_restore,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )
 
 
 class VideoMAEDecoder(nn.Module):
-    def __init__(self, config, num_patches):
+    def __init__(self, config, grid_size):
         super().__init__()
 
         decoder_num_labels = config.num_channels * config.tubelet_size * config.patch_size**2
@@ -683,13 +816,19 @@ class VideoMAEDecoder(nn.Module):
         decoder_config.num_hidden_layers = config.decoder_num_hidden_layers
         decoder_config.num_attention_heads = config.decoder_num_attention_heads
         decoder_config.intermediate_size = config.decoder_intermediate_size
+
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
+
+        self.decoder_pos_embed = build_3d_sincos_position_embedding(grid_size=grid_size, embed_dim=config.decoder_hidden_size)
+        self.decoder_pos_embed.requires_grad_(False)
+        
         self.decoder_layers = nn.ModuleList(
             [VideoMAELayer(decoder_config) for _ in range(config.decoder_num_hidden_layers)]
         )
 
-        self.norm = nn.LayerNorm(config.decoder_hidden_size)
+        self.norm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
         self.head = (
-            nn.Linear(config.decoder_hidden_size, decoder_num_labels) if decoder_num_labels > 0 else nn.Identity()
+            nn.Linear(config.decoder_hidden_size, decoder_num_labels, bias=True) if decoder_num_labels > 0 else nn.Identity()
         )
 
         self.gradient_checkpointing = False
@@ -698,11 +837,22 @@ class VideoMAEDecoder(nn.Module):
     def forward(
         self,
         hidden_states,
-        return_token_num,
+        ids_restore,
         output_attentions=False,
         output_hidden_states=False,
         return_dict=True,
-    ):
+    ):  
+        mask_tokens = self.mask_token.repeat(hidden_states.shape[0], ids_restore.shape[1] + 1 - hidden_states.shape[1], 1)
+        hidden_states_ = torch.cat([hidden_states, mask_tokens], dim=1)  # Include visible tokens and mask tokens
+
+        # Unshuffle to restore the original order of tokens including the newly added mask tokens
+        x = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_states.shape[2]))
+
+        expanded_position_embeddings = self.decoder_pos_embed.expand(hidden_states.shape[0], -1, -1).type_as(hidden_states)
+        expanded_position_embeddings = expanded_position_embeddings.to(hidden_states.device).clone().detach()
+        
+        hidden_states = x + expanded_position_embeddings
+
         # apply Transformer layers (blocks)
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -728,16 +878,17 @@ class VideoMAEDecoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        if return_token_num > 0:
-            hidden_states = hidden_states[:, -return_token_num:]
-
         # predictor projection
         hidden_states = self.norm(hidden_states)
         logits = self.head(hidden_states)
 
         if not return_dict:
             return tuple(v for v in [logits, all_hidden_states, all_self_attentions] if v is not None)
-        return VideoMAEDecoderOutput(logits=logits, hidden_states=all_hidden_states, attentions=all_self_attentions)
+        return VideoMAEDecoderOutput(
+            logits=logits,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attentions
+            )
 
 
 @add_start_docstrings(
@@ -752,32 +903,138 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         self.videomae = VideoMAEModel(config)
 
         self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=False)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
-        self.position_embeddings = get_sinusoid_encoding_table(
-            self.videomae.embeddings.num_patches, config.decoder_hidden_size
-        )
 
-        self.decoder = VideoMAEDecoder(config, num_patches=self.videomae.embeddings.num_patches)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
+
+        self.decoder = VideoMAEDecoder(config, grid_size=self.videomae.embeddings.grid_size)
+
+        self.patch_norm = nn.LayerNorm(normalized_shape=(config.patch_size*config.patch_size*config.tubelet_size*config.num_channels,),
+                                       eps=config.layer_norm_eps, elementwise_affine=False)
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def patchify(self, pixel_values):
+        """
+        Args:
+            pixel_values (`torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`):
+                3D pixel values with depth channel first.
+
+        Returns:
+            `torch.FloatTensor` of shape `(batch_size, num_patches, tubelet_size * patch_height * patch_width * num_channels)`:
+                Patchified 3D pixel values.
+        """
+        patch_size = self.config.patch_size
+        tubelet_size = self.config.tubelet_size
+        num_channels = self.config.num_channels
+        
+        if pixel_values.shape[2] != num_channels:
+            raise ValueError("Make sure the number of channels of the pixel values is equal to the one set in the configuration")
+
+        # patchify
+        batch_size, depth = pixel_values.shape[0], pixel_values.shape[1]
+        num_patches_depth = depth // tubelet_size
+        num_patches_one_direction = pixel_values.shape[3] // patch_size
+        num_patches_another_direction = pixel_values.shape[4] // patch_size
+
+        patchified_pixel_values = pixel_values.reshape(
+            batch_size, num_patches_depth, tubelet_size,
+            num_channels,
+            num_patches_one_direction, patch_size,
+            num_patches_another_direction, patch_size,
+        )
+        patchified_pixel_values = torch.einsum("btdchpwq->bthwdpqc", patchified_pixel_values)
+        patchified_pixel_values = patchified_pixel_values.reshape(
+            batch_size,
+            num_patches_depth * num_patches_one_direction * num_patches_another_direction,
+            tubelet_size * patch_size * patch_size * num_channels
+        )
+        return patchified_pixel_values
+    
+    def unpatchify(self, patchified_pixel_values):
+        """
+        Args:
+            patchified_pixel_values (`torch.FloatTensor` of shape `(batch_size, num_patches, tubelet_size * patch_height * patch_width * num_channels)`):
+                Patchified 3D pixel values.
+
+        Returns:
+            `torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`:
+                Unpatchified 3D pixel values.
+        """
+        patch_size = self.config.patch_size
+        image_size = self.config.image_size
+        tubelet_size = self.config.tubelet_size
+        num_channels = self.config.num_channels
+
+        # unpatchify
+        batch_size = patchified_pixel_values.shape[0]
+        num_patches_depth = patchified_pixel_values.shape[1] // (image_size // patch_size * image_size // patch_size)
+        num_patches_one_direction = image_size // patch_size
+        num_patches_another_direction = image_size // patch_size
+
+        patchified_pixel_values = patchified_pixel_values.reshape(
+            batch_size,
+            num_patches_depth,
+            num_patches_one_direction,
+            num_patches_another_direction,
+            tubelet_size,
+            patch_size,
+            patch_size,
+            num_channels
+        )
+        patchified_pixel_values = torch.einsum("bthwdpqc->btdchpwq", patchified_pixel_values)
+        pixel_values = patchified_pixel_values.reshape(
+            batch_size,
+            num_patches_depth * tubelet_size,
+            num_channels,
+            num_patches_one_direction * patch_size,
+            num_patches_another_direction * patch_size
+        )
+        return pixel_values
+    
+    def forward_loss(self, pixel_values, pred, mask):
+        """
+        Args:
+            pixel_values (`torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`):
+                Pixel values.
+            pred (`torch.FloatTensor` of shape `(batch_size, num_patches, patch_size**2 * num_channels)`:
+                Predicted pixel values.
+            mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`):
+                Tensor indicating which patches are masked (1) and which are not (0).
+
+        Returns:
+            `torch.FloatTensor`: Pixel reconstruction loss with optional NCC regularization.
+        """
+        target = self.patchify(pixel_values)
+
+        if self.config.norm_pix_loss:
+            frames_norm = self.patch_norm(target)
+        else:
+            frames_norm = target
+
+        # Compute reconstruction loss
+        loss = (pred - frames_norm) ** 2
+        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
+        reconstruction_loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        return reconstruction_loss
 
     @add_start_docstrings_to_model_forward(VIDEOMAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=VideoMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values: torch.FloatTensor,
-        bool_masked_pos: torch.BoolTensor,
+        apply_masking: bool = True,
         head_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[tuple, VideoMAEForPreTrainingOutput]:
         r"""
-        bool_masked_pos (`torch.BoolTensor` of shape `(batch_size, sequence_length)`):
+        apply_masking (`bool`):
             Boolean masked positions. Indicates which patches are masked (1) and which aren't (0). Each video in the
             batch must have the same number of masked patches. Sequence length is `(num_frames // tubelet_size) *
             (image_size // patch_size) ** 2`.
+        
 
         Returns:
 
@@ -806,119 +1063,33 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         outputs = self.videomae(
             pixel_values,
-            bool_masked_pos=bool_masked_pos,
+            apply_masking=apply_masking,
             head_mask=head_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        sequence_output = outputs[0]
-        sequence_output = self.encoder_to_decoder(
-            sequence_output
-        )  # [batch_size, num_visible_patches, decoder_hidden_size]
-        batch_size, seq_len, num_channels = sequence_output.shape
+        latent = outputs.last_hidden_state
+        ids_restore = outputs.ids_restore
+        mask = outputs.mask
 
-        # we don't unshuffle the correct visible token order, but shuffle the position embeddings accordingly.
-        if bool_masked_pos is None:
-            raise ValueError("One must provided a boolean mask ")
-        expanded_position_embeddings = self.position_embeddings.expand(batch_size, -1, -1).type_as(pixel_values)
-        expanded_position_embeddings = expanded_position_embeddings.to(pixel_values.device).clone().detach()
-        pos_emb_visible = expanded_position_embeddings[~bool_masked_pos].reshape(batch_size, -1, num_channels)
-        pos_emb_mask = expanded_position_embeddings[bool_masked_pos].reshape(batch_size, -1, num_channels)
+        sequence_output = self.encoder_to_decoder(latent)
 
-        # [batch_size, num_patches, decoder_hidden_size]
-        x_full = torch.cat([sequence_output + pos_emb_visible, self.mask_token + pos_emb_mask], dim=1)
-
-        # [batch_size, num_masked_patches, num_channels * patch_size * patch_size]
-        decoder_outputs = self.decoder(x_full, pos_emb_mask.shape[1])
+        decoder_outputs = self.decoder(sequence_output, ids_restore)
         logits = decoder_outputs.logits
 
-        loss = None
-        with torch.no_grad():
-            # calculate the labels to be predicted
-            if self.config.num_channels != 3:
-                # Can't unnormalize with default means/stds
-                frames = pixel_values
-            else:
-                # first, unnormalize the frames
-                device = pixel_values.device
-                dtype = pixel_values.dtype
-                mean = torch.as_tensor(IMAGENET_DEFAULT_MEAN).to(device=device, dtype=dtype)[None, None, :, None, None]
-                std = torch.as_tensor(IMAGENET_DEFAULT_STD).to(device=device, dtype=dtype)[None, None, :, None, None]
-                frames = pixel_values * std + mean  # in [0, 1]
-
-            batch_size, time, num_channels, height, width = frames.shape
-            tubelet_size, patch_size = self.config.tubelet_size, self.config.patch_size
-            if self.config.norm_pix_loss:
-                # step 1: split up dimensions (time by tubelet_size, height by patch_size, width by patch_size)
-                frames = frames.view(
-                    batch_size,
-                    time // tubelet_size,
-                    tubelet_size,
-                    num_channels,
-                    height // patch_size,
-                    patch_size,
-                    width // patch_size,
-                    patch_size,
-                )
-                # step 2: move dimensions to concatenate:
-                frames = frames.permute(0, 1, 4, 6, 2, 5, 7, 3).contiguous()
-                # step 3: concatenate:
-                frames = frames.view(
-                    batch_size,
-                    time // tubelet_size * height // patch_size * width // patch_size,
-                    tubelet_size * patch_size * patch_size,
-                    num_channels,
-                )
-                # step 4: normalize. The authors find that the mean is about 0.48 and standard deviation is about 0.08.
-                frames_norm = (frames - frames.mean(dim=-2, keepdim=True)) / (
-                    frames.var(dim=-2, unbiased=True, keepdim=True).sqrt() + 1e-6
-                )
-                # step 5: reshape to (batch_size, T//ts * H//ps * W//ps, ts * ps * ps * C)
-                videos_patch = frames_norm.view(
-                    batch_size,
-                    time // tubelet_size * height // patch_size * width // patch_size,
-                    tubelet_size * patch_size * patch_size * num_channels,
-                )
-            else:
-                if self.config.num_channels != 3:
-                    raise ValueError(
-                        "Can't unnormalize non-RGB images. Consider setting config.norm_pix_loss to False."
-                    )
-                # step 1: split up dimensions (time by tubelet_size, height by patch_size, width by patch_size)
-                frames = frames.view(
-                    batch_size,
-                    time // tubelet_size,
-                    tubelet_size,
-                    num_channels,
-                    height // patch_size,
-                    patch_size,
-                    width // patch_size,
-                    patch_size,
-                )
-                # step 2: move dimensions to concatenate: (batch_size, T//ts, H//ps, W//ps, ts, ps, ps, C)
-                frames = frames.permute(0, 1, 4, 6, 2, 5, 7, 3).contiguous()
-                # step 3: concatenate
-                videos_patch = frames.view(
-                    batch_size,
-                    time // tubelet_size * height // patch_size * width // patch_size,
-                    tubelet_size * patch_size * patch_size * num_channels,
-                )
-
-            batch_size, _, num_channels = videos_patch.shape
-            labels = videos_patch[bool_masked_pos].reshape(batch_size, -1, num_channels)
-
-        loss_fct = MSELoss()
-        loss = loss_fct(logits, labels)
+        loss = self.forward_loss(pixel_values=pixel_values, pred=logits, mask=mask)
 
         if not return_dict:
             output = (logits,) + outputs[1:]
             return ((loss,) + output) if loss is not None else output
 
-        return VideoMAEForPreTrainingOutput(
+        return ViTMAEForPreTrainingOutput(
             loss=loss,
             logits=logits,
+            mask=mask,
+            ids_restore=ids_restore,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
