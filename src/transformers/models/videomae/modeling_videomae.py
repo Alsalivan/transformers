@@ -208,7 +208,7 @@ class VideoMAEEmbeddings(nn.Module):
                 mainly used for testing purposes to control randomness and maintain the reproducibility
         """
         batch_size, seq_length, dim = sequence.shape
-        len_keep = int(seq_length * (1 - self.config.mask_ratio))
+        len_keep = int(seq_length * (1 - self.config.mask_ratio) + 0.5)
 
         if noise is None:
             noise = torch.rand(batch_size, seq_length, device=sequence.device)  # noise in [0, 1]
@@ -219,7 +219,7 @@ class VideoMAEEmbeddings(nn.Module):
 
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
-        sequence_unmasked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
+        sequence_masked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
 
         # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([batch_size, seq_length], device=sequence.device)
@@ -227,7 +227,7 @@ class VideoMAEEmbeddings(nn.Module):
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
-        return sequence_unmasked, mask, ids_restore
+        return sequence_masked, mask, ids_restore
 
     def forward(self, pixel_values, apply_masking=True):
         embeddings = self.patch_embeddings(pixel_values)
@@ -452,7 +452,7 @@ class VideoMAEIntermediate(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
-        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # self.dropout = nn.Dropout(config.hidden_dropout_prob) # ommit this for the orignal BERT implement
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -604,8 +604,8 @@ class VideoMAEPreTrainedModel(PreTrainedModel):
                 nn.init.ones_(module.weight)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-        elif hasattr(module, 'mask_token'):
-            nn.init.normal_(module.mask_token, mean=0.0, std=self.config.initializer_range)
+        elif hasattr(module, nn.Parameter):
+            nn.init.normal_(module, mean=0.0, std=self.config.initializer_range)
 
 VIDEOMAE_START_DOCSTRING = r"""
     This model is a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass. Use it
@@ -819,14 +819,14 @@ class VideoMAEDecoder(nn.Module):
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
 
-        self.decoder_pos_embed = build_3d_sincos_position_embedding(grid_size=grid_size, embed_dim=config.decoder_hidden_size)
-        self.decoder_pos_embed.requires_grad_(False)
+        self.decoder_position_embeddings = build_3d_sincos_position_embedding(grid_size=grid_size, embed_dim=config.decoder_hidden_size)
+        self.decoder_position_embeddings.requires_grad_(False)
         
         self.decoder_layers = nn.ModuleList(
             [VideoMAELayer(decoder_config) for _ in range(config.decoder_num_hidden_layers)]
         )
 
-        self.norm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
+        self.layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
         self.head = (
             nn.Linear(config.decoder_hidden_size, decoder_num_labels, bias=True) if decoder_num_labels > 0 else nn.Identity()
         )
@@ -848,7 +848,7 @@ class VideoMAEDecoder(nn.Module):
         # Unshuffle to restore the original order of tokens including the newly added mask tokens
         x = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_states.shape[2]))
 
-        expanded_position_embeddings = self.decoder_pos_embed.expand(hidden_states.shape[0], -1, -1).type_as(hidden_states)
+        expanded_position_embeddings = self.decoder_position_embeddings.expand(hidden_states.shape[0], -1, -1).type_as(hidden_states)
         expanded_position_embeddings = expanded_position_embeddings.to(hidden_states.device).clone().detach()
         
         hidden_states = x + expanded_position_embeddings
@@ -879,7 +879,7 @@ class VideoMAEDecoder(nn.Module):
             all_hidden_states = all_hidden_states + (hidden_states,)
 
         # predictor projection
-        hidden_states = self.norm(hidden_states)
+        hidden_states = self.layernorm(hidden_states)
         logits = self.head(hidden_states)
 
         if not return_dict:
@@ -902,14 +902,12 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         self.videomae = VideoMAEModel(config)
 
-        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=False)
-
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
+        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
 
         self.decoder = VideoMAEDecoder(config, grid_size=self.videomae.embeddings.grid_size)
 
-        self.patch_norm = nn.LayerNorm(normalized_shape=(config.patch_size*config.patch_size*config.tubelet_size*config.num_channels,),
-                                       eps=config.layer_norm_eps, elementwise_affine=False)
+        self.patch_layernorm = nn.LayerNorm(normalized_shape=(config.patch_size*config.patch_size*config.tubelet_size*config.num_channels,),
+                                            eps=config.layer_norm_eps, elementwise_affine=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1008,7 +1006,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         target = self.patchify(pixel_values)
 
         if self.config.norm_pix_loss:
-            frames_norm = self.patch_norm(target)
+            frames_norm = self.patch_layernorm(target)
         else:
             frames_norm = target
 
@@ -1016,7 +1014,21 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         loss = (pred - frames_norm) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
         reconstruction_loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        return reconstruction_loss
+
+        # Unpatchify predicted patches to get reconstructed images
+        imgs_hat = self.unpatchify(pred)
+
+        # Normalize target and predicted images
+        target_normalized = (pixel_values - pixel_values.mean(dim=(1, 2, 3), keepdim=True)) / (pixel_values.var(dim=(1, 2, 3), keepdim=True) + 1e-12) ** 0.5
+        pred_normalized = (imgs_hat - imgs_hat.mean(dim=(1, 2, 3), keepdim=True)) / (imgs_hat.var(dim=(1, 2, 3), keepdim=True) + 1e-12) ** 0.5
+
+        # Compute cross-correlation
+        cross_corrs = torch.sum(target_normalized * pred_normalized, dim=(1, 2, 3)) / (pixel_values[0].numel() - 1)
+        ncc = cross_corrs.mean()
+
+        # Combine losses
+        total_loss = (1 - self.config.ncc_weight) * reconstruction_loss + self.config.ncc_weight * (1 - ncc)
+        return total_loss
 
     @add_start_docstrings_to_model_forward(VIDEOMAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=VideoMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)

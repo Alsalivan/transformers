@@ -155,7 +155,7 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, add_cls_token=False):
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if add_cls_token:
         pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
-    return pos_embed
+    return torch.from_numpy(pos_embed).unsqueeze(0)
 
 
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
@@ -202,28 +202,16 @@ class ViTMAEEmbeddings(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
         self.patch_embeddings = ViTMAEPatchEmbeddings(config)
+
         self.num_patches = self.patch_embeddings.num_patches
         self.grid_size = self.patch_embeddings.grid_size
-        # fixed sin-cos embedding
-        self.position_embeddings = nn.Parameter(
-            torch.zeros(1, self.num_patches + 1, config.hidden_size), requires_grad=False
-        )
+
+        self.position_embeddings = get_2d_sincos_pos_embed(embed_dim=config.hidden_size, grid_size=self.grid_size,
+                                                           add_cls_token=True)
+        self.position_embeddings.requires_grad_(False)
+
         self.config = config
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # initialize (and freeze) position embeddings by sin-cos embedding
-        pos_embed = get_2d_sincos_pos_embed(
-            self.position_embeddings.shape[-1], self.grid_size, add_cls_token=True
-        )
-        self.position_embeddings.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # initialize patch_embeddings like nn.Linear (instead of nn.Conv2d)
-        w = self.patch_embeddings.projection.weight.data
-        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-
-        # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
-        torch.nn.init.normal_(self.cls_token, std=self.config.initializer_range)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def random_masking(self, sequence, noise=None):
         """
@@ -236,41 +224,41 @@ class ViTMAEEmbeddings(nn.Module):
                 mainly used for testing purposes to control randomness and maintain the reproducibility
         """
         batch_size, seq_length, dim = sequence.shape
-        len_keep = int(seq_length * (1 - self.config.mask_ratio))
+        len_keep = int(seq_length * (1 - self.config.mask_ratio) + 0.5)
 
         if noise is None:
             noise = torch.rand(batch_size, seq_length, device=sequence.device)  # noise in [0, 1]
 
-        # sort noise for each sample
         ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
         ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-        # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
-        sequence_unmasked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
+        sequence_masked = torch.gather(sequence, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
 
-        # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([batch_size, seq_length], device=sequence.device)
         mask[:, :len_keep] = 0
-        # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
-        return sequence_unmasked, mask, ids_restore
+        return sequence_masked, mask, ids_restore
 
     def forward(self, pixel_values, noise=None):
-        batch_size, num_channels, height, width = pixel_values.shape
+        batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        # add position embeddings w/o cls token
-        embeddings = embeddings + self.position_embeddings[:, 1:, :]
+        position_embeddings = self.position_embeddings.expand(batch_size, -1, -1).type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1, embed_dim)
+
+        # add pos embed w/o cls token
+        embeddings = embeddings + position_embeddings[:, 1:, :]
 
         # masking: length -> length * config.mask_ratio
         embeddings, mask, ids_restore = self.random_masking(embeddings, noise)
 
-        # append cls token
-        cls_token = self.cls_token + self.position_embeddings[:, :1, :]
-        cls_tokens = cls_token.expand(embeddings.shape[0], -1, -1)
+        # Append the CLS token to the sequence
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        cls_tokens = cls_tokens + position_embeddings[:, :1, :]
         embeddings = torch.cat((cls_tokens, embeddings), dim=1)
+
+        embeddings = self.dropout(embeddings)
 
         return embeddings, mask, ids_restore
 
@@ -287,8 +275,10 @@ class ViTMAEPatchEmbeddings(nn.Module):
         image_size, patch_size = config.image_size, config.patch_size
         
         num_channels, hidden_size = config.num_channels, config.hidden_size
+        
         image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
         patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+
         grid_size = (image_size[0] // patch_size[0], image_size[1] // patch_size[1])
         num_patches = grid_size[0] * grid_size[1]
 
@@ -439,6 +429,7 @@ class ViTMAEIntermediate(nn.Module):
     def __init__(self, config: ViTMAEConfig) -> None:
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
+        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -447,6 +438,7 @@ class ViTMAEIntermediate(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
+        # hidden_states = self.dropout(hidden_states)
 
         return hidden_states
 
@@ -576,14 +568,18 @@ class ViTMAEPreTrainedModel(PreTrainedModel):
     def _init_weights(self, module):
         """Initialize the weights"""
         if isinstance(module, (nn.Linear, nn.Conv2d)):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Upcast the input in `fp32` and cast it back to desired `dtype` to avoid
+            # `trunc_normal_cpu` not implemented in `half` issues
+            module.weight.data = nn.init.trunc_normal_(
+                module.weight.data.to(torch.float32), mean=0.0, std=self.config.initializer_range
+            ).to(module.weight.dtype)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
+        elif isinstance(module, nn.Parameter):
+            module.data.normal_(mean=0.0, std=self.config.initializer_range)
 
 
 VIT_MAE_START_DOCSTRING = r"""
@@ -724,36 +720,28 @@ class ViTMAEDecoder(nn.Module):
         super().__init__()
         self.decoder_embed = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
-        self.decoder_pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches + 1, config.decoder_hidden_size), requires_grad=False
-        )  # fixed sin-cos embedding
+        
+        self.decoder_position_embeddings = get_2d_sincos_pos_embed(embed_dim=config.decoder_hidden_size, 
+                                                                   grid_size=grid_size, add_cls_token=True)
+        self.decoder_position_embeddings.requires_grad_(False)
 
         decoder_config = deepcopy(config)
         decoder_config.hidden_size = config.decoder_hidden_size
         decoder_config.num_hidden_layers = config.decoder_num_hidden_layers
         decoder_config.num_attention_heads = config.decoder_num_attention_heads
         decoder_config.intermediate_size = config.decoder_intermediate_size
+        
         self.decoder_layers = nn.ModuleList(
             [ViTMAELayer(decoder_config) for _ in range(config.decoder_num_hidden_layers)]
         )
 
-        self.decoder_norm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
+        self.decoder_layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
+
         self.decoder_pred = nn.Linear(
             config.decoder_hidden_size, config.patch_size[0] * config.patch_size[1] * config.num_channels, bias=True
-        )  # encoder to decoder
+        )
         self.gradient_checkpointing = False
         self.config = config
-        self.initialize_weights(grid_size)
-
-    def initialize_weights(self, grid_size):
-        # initialize (and freeze) position embeddings by sin-cos embedding
-        decoder_pos_embed = get_2d_sincos_pos_embed(
-            self.decoder_pos_embed.shape[-1], grid_size, add_cls_token=True
-        )
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
-
-        # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
-        torch.nn.init.normal_(self.mask_token, std=self.config.initializer_range)
 
     def forward(
         self,
@@ -762,7 +750,7 @@ class ViTMAEDecoder(nn.Module):
         output_attentions=False,
         output_hidden_states=False,
         return_dict=True,
-    ):
+    ):  
         # embed tokens
         x = self.decoder_embed(hidden_states)
 
@@ -773,7 +761,8 @@ class ViTMAEDecoder(nn.Module):
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
 
         # add pos embed
-        hidden_states = x + self.decoder_pos_embed
+        position_embeddings = self.decoder_position_embeddings.expand(x.shape[0], -1, -1).type_as(x).to(x.device).clone().detach()
+        hidden_states = x + position_embeddings
 
         # apply Transformer layers (blocks)
         all_hidden_states = () if output_hidden_states else None
@@ -800,7 +789,7 @@ class ViTMAEDecoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        hidden_states = self.decoder_norm(hidden_states)
+        hidden_states = self.decoder_layernorm(hidden_states)
 
         # predictor projection
         logits = self.decoder_pred(hidden_states)
@@ -880,11 +869,18 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         num_patches_one_direction, num_patches_another_direction = self.grid_size
 
         patchified_pixel_values = pixel_values.reshape(
-            batch_size, num_channels, num_patches_one_direction, patch_size[0], num_patches_another_direction, patch_size[1]
+            batch_size,
+            num_channels,
+            num_patches_one_direction, 
+            patch_size[0], 
+            num_patches_another_direction, 
+            patch_size[1]
         )
         patchified_pixel_values = torch.einsum("nchpwq->nhwpqc", patchified_pixel_values)
         patchified_pixel_values = patchified_pixel_values.reshape(
-            batch_size, num_patches_one_direction * num_patches_another_direction, patch_size[0] * patch_size[1] * num_channels
+            batch_size, 
+            num_patches_one_direction * num_patches_another_direction, 
+            patch_size[0] * patch_size[1] * num_channels
         )
         return patchified_pixel_values
 
@@ -949,8 +945,12 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         target_normalized = (pixel_values - pixel_values.mean(dim=-1, keepdim=True)) / (pixel_values.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
         pred_normalized = (imgs_hat - imgs_hat.mean(dim=-1, keepdim=True)) / (imgs_hat.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
 
+        nb_of_signals = 1
+        for dim in range(pixel_values.dim()-1): # all but the last dimension (which is the actual signal)
+            nb_of_signals = nb_of_signals * pixel_values.shape[dim]
+
         cross_corrs = (1.0 / (pixel_values.shape[-1] - 1)) * torch.sum(target_normalized * pred_normalized, dim=-1)
-        ncc = cross_corrs.mean()
+        ncc = cross_corrs.sum() / nb_of_signals
 
         # Combine losses
         total_loss = (1 - self.config.ncc_weight) * reconstruction_loss + self.config.ncc_weight * (1 - ncc)
