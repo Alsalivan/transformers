@@ -241,7 +241,7 @@ class ViTMAEEmbeddings(nn.Module):
 
         return sequence_masked, mask, ids_restore
 
-    def forward(self, pixel_values, noise=None):
+    def forward(self, pixel_values, noise=None, apply_masking=True):
         batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
@@ -251,7 +251,10 @@ class ViTMAEEmbeddings(nn.Module):
         embeddings = embeddings + position_embeddings[:, 1:, :]
 
         # masking: length -> length * config.mask_ratio
-        embeddings, mask, ids_restore = self.random_masking(embeddings, noise)
+        if apply_masking:
+            embeddings, mask, ids_restore = self.random_masking(embeddings, noise)
+        else:
+            mask, ids_restore = None, None
 
         # Append the CLS token to the sequence
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)
@@ -649,6 +652,7 @@ class ViTMAEModel(ViTMAEPreTrainedModel):
     def forward(
         self,
         pixel_values: Optional[torch.FloatTensor] = None,
+        apply_masking: bool = True,
         noise: Optional[torch.FloatTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -691,7 +695,7 @@ class ViTMAEModel(ViTMAEPreTrainedModel):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        embedding_output, mask, ids_restore = self.embeddings(pixel_values, noise=noise)
+        embedding_output, mask, ids_restore = self.embeddings(pixel_values, noise=noise, apply_masking=apply_masking)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -961,6 +965,7 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
     def forward(
         self,
         pixel_values: Optional[torch.FloatTensor] = None,
+        apply_masking: bool = True,
         noise: Optional[torch.FloatTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -993,6 +998,7 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
 
         outputs = self.vit(
             pixel_values,
+            apply_masking=apply_masking,
             noise=noise,
             head_mask=head_mask,
             output_attentions=output_attentions,

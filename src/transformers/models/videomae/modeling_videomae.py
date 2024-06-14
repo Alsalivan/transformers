@@ -297,7 +297,7 @@ class CosAttention(nn.Module):
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         self.scale = nn.Parameter(torch.log(10 * torch.ones((self.num_attention_heads, 1, 1)))) if qk_scale is None else qk_scale
-        self.qkv = nn.Linear(config.hidden_size, self.all_head_size * 3, bias=config.qkv_bias)
+        self.qkv = nn.Linear(config.hidden_size, self.all_head_size * 3, bias=True)
 
         self.attn_drop = nn.Dropout(config.attention_probs_dropout_prob)
 
@@ -604,8 +604,10 @@ class VideoMAEPreTrainedModel(PreTrainedModel):
                 nn.init.ones_(module.weight)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-        elif hasattr(module, nn.Parameter):
-            nn.init.normal_(module, mean=0.0, std=self.config.initializer_range)
+        else:
+            for name, param in module.named_parameters():
+                if param.requires_grad and isinstance(param, nn.Parameter):
+                    nn.init.normal_(param, mean=0.0, std=self.config.initializer_range)
 
 VIDEOMAE_START_DOCSTRING = r"""
     This model is a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass. Use it
@@ -656,10 +658,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         self.embeddings = VideoMAEEmbeddings(config)
         self.encoder = VideoMAEEncoder(config)
 
-        if config.use_mean_pooling:
-            self.layernorm = None
-        else:
-            self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
         # Initialize weights and apply final processing
         self.post_init()
