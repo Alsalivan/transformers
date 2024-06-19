@@ -99,6 +99,43 @@ class VideoMAEForPreTrainingOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
+class VideoMAEPatchEmbeddings(nn.Module):
+    """
+    Video to Patch Embedding. This module turns a batch of videos of shape (batch_size, num_frames, num_channels,
+    height, width) into a tensor of shape (batch_size, seq_len, hidden_size) to be consumed by a Transformer encoder.
+
+    The seq_len (the number of patches) equals (number of frames // tubelet_size) * (height // patch_size) * (width //
+    patch_size).
+
+    """
+
+    def __init__(self, config):
+        super().__init__()
+
+        num_channels = config.num_channels
+        hidden_size = config.hidden_size
+
+        self.patch_size = config.patch_size
+        self.tubelet_size = int(config.tubelet_size)
+
+        self.num_channels = num_channels
+
+        self.grid_size = (config.num_frames // config.tubelet_size,
+                          config.image_size // config.patch_size,
+                          config.image_size // config.patch_size)
+
+        self.projection = nn.Conv3d(
+            in_channels=num_channels,
+            out_channels=hidden_size,
+            kernel_size=(self.tubelet_size, self.patch_size, self.patch_size),
+            stride=(self.tubelet_size, self.patch_size, self.patch_size),
+        )
+
+    def forward(self, pixel_values):
+        # (batch_size, num_channels, num_frames, height, width)
+        embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
+        return embeddings
+    
 # sin-cos position encoding
 # https://github.com/jadore801120/attention-is-all-you-need-pytorch/blob/master/transformer/Models.py#L31
 def get_sinusoid_encoding_table(n_position, d_hid):
@@ -119,57 +156,29 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     sinusoid_table[:, 0::2] = torch.sin(angle_rads)  # Apply sin to even indices: 2i
     sinusoid_table[:, 1::2] = torch.cos(angle_rads)  # Apply cos to odd indices: 2i+1
 
-    return sinusoid_table.unsqueeze(0)
+    return sinusoid_table
 
-def build_3d_sincos_position_embedding(grid_size, embed_dim):
-    """
-    Create 3D sinusoidal position embeddings adapted for specified grid size in video data.
+def create_positional_embeddings(num_patches_x, num_patches_y, num_patches_t, embed_dim):
+    t_embeddings = get_sinusoid_encoding_table(num_patches_t, embed_dim)
+    hw_embeddings = get_sinusoid_encoding_table(num_patches_x * num_patches_y, embed_dim)
+
+    t_embeddings = t_embeddings.unsqueeze(1).repeat(1, num_patches_x * num_patches_y, 1)
+    hw_embeddings = hw_embeddings.unsqueeze(0).repeat(num_patches_t, 1, 1)
     
-    Args:
-        grid_size (tuple): Tuple of three integers (depth, x, y) of the grid.
-        embed_dim (int): The dimensionality of the embeddings.
+    positional_embeddings = t_embeddings + hw_embeddings
+    return positional_embeddings.flatten(0, 1).unsqueeze(0)
 
-    Returns:
-        torch.Tensor: A tensor containing the positional encodings, shape [1, total_patches, embed_dim].
-    """
-    # Calculate the number of channels needed
-    channels = embed_dim // 6 * 2
-    remainder = embed_dim % 6
-    if remainder > 0:
-        channels += 2
+def original_positional_embeddings(n_position, d_hid): 
+    ''' Sinusoid position encoding table ''' 
+    # TODO: make it with torch instead of numpy 
+    def get_position_angle_vec(position): 
+        return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)] 
 
-    # Create the inverse frequency tensor
-    inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
+    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)]) 
+    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2]) # dim 2i 
+    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2]) # dim 2i+1 
 
-    d, x, y = grid_size
-    pos_d = torch.arange(d, dtype=torch.float32)
-    pos_x = torch.arange(x, dtype=torch.float32)
-    pos_y = torch.arange(y, dtype=torch.float32)
-
-    sin_inp_d = torch.einsum('i,j->ij', pos_d, inv_freq)
-    sin_inp_x = torch.einsum('i,j->ij', pos_x, inv_freq)
-    sin_inp_y = torch.einsum('i,j->ij', pos_y, inv_freq)
-
-    def get_emb(sin_inp):
-        """
-        Gets a base embedding for one dimension with sin and cos intertwined.
-        """
-        emb = torch.stack((sin_inp.sin(), sin_inp.cos()), dim=-1)
-        return torch.flatten(emb, -2, -1)
-
-    emb_d = get_emb(sin_inp_d).unsqueeze(1).unsqueeze(1)
-    emb_x = get_emb(sin_inp_x).unsqueeze(1)
-    emb_y = get_emb(sin_inp_y)
-
-    emb = torch.zeros((d, x, y, channels * 3), dtype=torch.float32)
-    emb[:, :, :, :channels] = emb_d
-    emb[:, :, :, channels:2*channels] = emb_x
-    emb[:, :, :, 2*channels:] = emb_y
-
-    if embed_dim % 6 != 0:
-        emb = emb[:, :, :, :embed_dim]
-
-    return emb.view(1, d * x * y, embed_dim)
+    return torch.tensor(sinusoid_table,dtype=torch.float, requires_grad=False).unsqueeze(0) 
 
 
 class VideoMAEEmbeddings(nn.Module):
@@ -177,22 +186,20 @@ class VideoMAEEmbeddings(nn.Module):
     Construct the patch and position embeddings.
 
     """
-
     def __init__(self, config):
         super().__init__()
 
         self.patch_embeddings = VideoMAEPatchEmbeddings(config)
-        self.num_patches = self.patch_embeddings.num_patches
-        self.grid_size = (config.num_frames // config.tubelet_size,
-                          config.image_size // config.patch_size,
-                          config.image_size // config.patch_size)
+        self.grid_size = self.patch_embeddings.grid_size
+        self.patch_size = self.patch_embeddings.patch_size
+        self.tubelet_size = self.patch_embeddings.tubelet_size
         
         # fixed sin-cos embedding
         if config.use_learnable_pos_emb:
-            self.position_embeddings = nn.Parameter(torch.zeros(1, self.num_patches, config.hidden_size))
+            self.position_embeddings = nn.Parameter(torch.zeros(1, self.grid_size[0] * self.grid_size[1] * self.grid_size[2], config.hidden_size), requires_grad=True)
         else:
-            self.position_embeddings = build_3d_sincos_position_embedding(grid_size=self.grid_size, embed_dim=config.hidden_size)
-            self.position_embeddings.requires_grad_(False)
+            self.position_embeddings = nn.Parameter(original_positional_embeddings(n_position=self.grid_size[0] * self.grid_size[1] * self.grid_size[2],
+                                                                                   d_hid=config.hidden_size), requires_grad=False)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.config = config
@@ -233,7 +240,7 @@ class VideoMAEEmbeddings(nn.Module):
         embeddings = self.patch_embeddings(pixel_values)
 
         # add position embeddings
-        expanded_position_embeddings = self.position_embeddings.expand(embeddings.shape[0], -1, -1).type_as(embeddings).to(embeddings.device).clone().detach()
+        expanded_position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach()
         embeddings = embeddings + expanded_position_embeddings
 
         # masking: length -> length * config.mask_rati[o
@@ -245,47 +252,6 @@ class VideoMAEEmbeddings(nn.Module):
         embeddings = self.dropout(embeddings)
 
         return embeddings, mask, ids_restore
-
-
-class VideoMAEPatchEmbeddings(nn.Module):
-    """
-    Video to Patch Embedding. This module turns a batch of videos of shape (batch_size, num_frames, num_channels,
-    height, width) into a tensor of shape (batch_size, seq_len, hidden_size) to be consumed by a Transformer encoder.
-
-    The seq_len (the number of patches) equals (number of frames // tubelet_size) * (height // patch_size) * (width //
-    patch_size).
-
-    """
-
-    def __init__(self, config):
-        super().__init__()
-
-        num_channels = config.num_channels
-        hidden_size = config.hidden_size
-        num_frames = config.num_frames
-
-        self.image_size = config.image_size
-        self.patch_size = config.patch_size
-        self.tubelet_size = int(config.tubelet_size)
-
-        num_patches = (
-            (self.image_size // self.patch_size) * (self.image_size // self.patch_size) * (num_frames // self.tubelet_size)
-        )
-        self.num_channels = num_channels
-        self.num_patches = num_patches
-
-        self.projection = nn.Conv3d(
-            in_channels=num_channels,
-            out_channels=hidden_size,
-            kernel_size=(self.tubelet_size, self.patch_size, self.patch_size),
-            stride=(self.tubelet_size, self.patch_size, self.patch_size),
-        )
-
-    def forward(self, pixel_values):
-        # permute from (batch_size, num_frames, num_channels, height, width) to (batch_size, num_channels, num_frames, height, width)
-        pixel_values = pixel_values.permute(0, 2, 1, 3, 4)
-        embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
-        return embeddings
 
 
 class CosAttention(nn.Module):
@@ -452,7 +418,7 @@ class VideoMAEIntermediate(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
-        # self.dropout = nn.Dropout(config.hidden_dropout_prob) # ommit this for the orignal BERT implement
+        self.dropout = nn.Dropout(config.hidden_dropout_prob) # ommit this for the orignal BERT implement
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -461,7 +427,7 @@ class VideoMAEIntermediate(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
-        # hidden_states = self.dropout(hidden_states)
+        hidden_states = self.dropout(hidden_states)
 
         return hidden_states
 
@@ -486,11 +452,14 @@ class VideoMAEOutput(nn.Module):
 class VideoMAELayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
 
-    def __init__(self, config: VideoMAEConfig) -> None:
+    def __init__(self, config: VideoMAEConfig, drop_path_rate=0.) -> None:
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = VideoMAEAttention(config)
+
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
+        
         self.intermediate = VideoMAEIntermediate(config)
         self.output = VideoMAEOutput(config)
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -508,6 +477,8 @@ class VideoMAELayer(nn.Module):
             output_attentions=output_attentions,
         )
         attention_output = self_attention_outputs[0]
+
+        attention_output = self.drop_path(attention_output)
 
         # first residual connection
         hidden_states = attention_output + hidden_states
@@ -531,7 +502,9 @@ class VideoMAEEncoder(nn.Module):
     def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([VideoMAELayer(config) for _ in range(config.num_hidden_layers)])
+        depth = config.num_hidden_layers
+        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]
+        self.layer = nn.ModuleList([VideoMAELayer(config, drop_path_rate=dpr[i]) for i in range(depth)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -789,8 +762,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs[0]
-        if self.layernorm is not None:
-            sequence_output = self.layernorm(sequence_output)
+        sequence_output = self.layernorm(sequence_output)
 
         if not return_dict:
             return (sequence_output, mask, ids_restore) + encoder_outputs[1:]
@@ -805,10 +777,10 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
 
 
 class VideoMAEDecoder(nn.Module):
-    def __init__(self, config, grid_size):
+    def __init__(self, config, grid_size, patch_size, tubelet_size):
         super().__init__()
 
-        decoder_num_labels = config.num_channels * config.tubelet_size * config.patch_size**2
+        self.grid_size = grid_size # (num_t_patches, num_x_patches, num_y_patches)
 
         decoder_config = deepcopy(config)
         decoder_config.hidden_size = config.decoder_hidden_size
@@ -816,19 +788,18 @@ class VideoMAEDecoder(nn.Module):
         decoder_config.num_attention_heads = config.decoder_num_attention_heads
         decoder_config.intermediate_size = config.decoder_intermediate_size
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
 
-        self.decoder_position_embeddings = build_3d_sincos_position_embedding(grid_size=grid_size, embed_dim=config.decoder_hidden_size)
-        self.decoder_position_embeddings.requires_grad_(False)
-        
-        self.decoder_layers = nn.ModuleList(
-            [VideoMAELayer(decoder_config) for _ in range(config.decoder_num_hidden_layers)]
-        )
+        self.decoder_position_embeddings = nn.Parameter(original_positional_embeddings(n_position=self.grid_size[0] * self.grid_size[1] * self.grid_size[2],
+                                                                                       d_hid=config.decoder_hidden_size), requires_grad=False)
+
+        depth = decoder_config.num_hidden_layers
+        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]
+
+        self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config, drop_path_rate=dpr[i]) for i in range(depth)])
 
         self.layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
-        self.head = (
-            nn.Linear(config.decoder_hidden_size, decoder_num_labels, bias=True) if decoder_num_labels > 0 else nn.Identity()
-        )
+        self.head = nn.Linear(config.decoder_hidden_size, patch_size*patch_size*tubelet_size, bias=True)
 
         self.gradient_checkpointing = False
         self.config = config
@@ -841,13 +812,19 @@ class VideoMAEDecoder(nn.Module):
         output_hidden_states=False,
         return_dict=True,
     ):  
-        mask_tokens = self.mask_token.repeat(hidden_states.shape[0], ids_restore.shape[1] + 1 - hidden_states.shape[1], 1)
+        batch_size, num_visible, hidden_dim = hidden_states.shape
+        original_length = ids_restore.shape[1]
+
+        num_mask_tokens = original_length - num_visible
+
+        mask_tokens = self.mask_token.repeat(batch_size, num_mask_tokens, 1)
+
         hidden_states_ = torch.cat([hidden_states, mask_tokens], dim=1)  # Include visible tokens and mask tokens
 
         # Unshuffle to restore the original order of tokens including the newly added mask tokens
-        x = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_states.shape[2]))
+        x = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_dim))
 
-        expanded_position_embeddings = self.decoder_position_embeddings.expand(hidden_states.shape[0], -1, -1).type_as(hidden_states)
+        expanded_position_embeddings = self.decoder_position_embeddings.type_as(hidden_states)
         expanded_position_embeddings = expanded_position_embeddings.to(hidden_states.device).clone().detach()
         
         hidden_states = x + expanded_position_embeddings
@@ -901,11 +878,15 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         self.videomae = VideoMAEModel(config)
 
-        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
+        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=False)
 
-        self.decoder = VideoMAEDecoder(config, grid_size=self.videomae.embeddings.grid_size)
+        self.patch_size = self.videomae.embeddings.patch_size
+        self.tubelet_size = self.videomae.embeddings.tubelet_size
+        self.grid_size = self.videomae.embeddings.grid_size
 
-        self.patch_layernorm = nn.LayerNorm(normalized_shape=(config.patch_size*config.patch_size*config.tubelet_size*config.num_channels,),
+        self.decoder = VideoMAEDecoder(config, grid_size=self.grid_size, patch_size=self.patch_size, tubelet_size=self.tubelet_size)
+
+        self.patch_layernorm = nn.LayerNorm(normalized_shape=(self.patch_size*self.patch_size*self.tubelet_size*config.num_channels,),
                                             eps=config.layer_norm_eps, elementwise_affine=False)
 
         # Initialize weights and apply final processing
@@ -913,86 +894,65 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
     def patchify(self, pixel_values):
         """
+        Convert pixel values to patches.
+
         Args:
-            pixel_values (`torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`):
-                3D pixel values with depth channel first.
+            pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, depth, height, width)`):
+                Pixel values.
 
         Returns:
-            `torch.FloatTensor` of shape `(batch_size, num_patches, tubelet_size * patch_height * patch_width * num_channels)`:
-                Patchified 3D pixel values.
+            `torch.FloatTensor` of shape `(batch_size, num_patches, patch_size**2 * num_channels)`:
+                Patches of pixel values.
         """
-        patch_size = self.config.patch_size
-        tubelet_size = self.config.tubelet_size
-        num_channels = self.config.num_channels
-        
-        if pixel_values.shape[2] != num_channels:
-            raise ValueError("Make sure the number of channels of the pixel values is equal to the one set in the configuration")
+        batch_size, num_channels, depth, height, width = pixel_values.shape
 
-        # patchify
-        batch_size, depth = pixel_values.shape[0], pixel_values.shape[1]
-        num_patches_depth = depth // tubelet_size
-        num_patches_one_direction = pixel_values.shape[3] // patch_size
-        num_patches_another_direction = pixel_values.shape[4] // patch_size
+        # Split depth into tubelets
+        pixel_values = pixel_values.unfold(2, self.tubelet_size, self.tubelet_size)
+        depth = depth // self.tubelet_size
 
-        patchified_pixel_values = pixel_values.reshape(
-            batch_size, num_patches_depth, tubelet_size,
-            num_channels,
-            num_patches_one_direction, patch_size,
-            num_patches_another_direction, patch_size,
-        )
-        patchified_pixel_values = torch.einsum("btdchpwq->bthwdpqc", patchified_pixel_values)
-        patchified_pixel_values = patchified_pixel_values.reshape(
-            batch_size,
-            num_patches_depth * num_patches_one_direction * num_patches_another_direction,
-            tubelet_size * patch_size * patch_size * num_channels
-        )
-        return patchified_pixel_values
-    
+        # Split height and width into patches
+        pixel_values = pixel_values.unfold(3, self.patch_size, self.patch_size).unfold(4, self.patch_size, self.patch_size)
+
+        # Reshape to (batch_size, num_patches, patch_size*patch_size*tubelet_size*num_channels)
+        patches = pixel_values.contiguous().view(batch_size, num_channels, depth, -1, self.patch_size * self.patch_size * self.tubelet_size)
+
+        # Merge depth and patch dimensions
+        patches = patches.permute(0, 2, 3, 1, 4).contiguous().view(batch_size, -1, self.patch_size * self.patch_size * self.tubelet_size * num_channels)
+
+        return patches
+
     def unpatchify(self, patchified_pixel_values):
         """
+        Convert patches back to original pixel values.
+
         Args:
             patchified_pixel_values (`torch.FloatTensor` of shape `(batch_size, num_patches, tubelet_size * patch_height * patch_width * num_channels)`):
                 Patchified 3D pixel values.
 
         Returns:
-            `torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`:
+            `torch.FloatTensor` of shape `(batch_size, num_channels, depth, height, width)`:
                 Unpatchified 3D pixel values.
         """
-        patch_size = self.config.patch_size
-        image_size = self.config.image_size
-        tubelet_size = self.config.tubelet_size
-        num_channels = self.config.num_channels
+        batch_size, num_patches, patch_dim = patchified_pixel_values.shape
 
-        # unpatchify
-        batch_size = patchified_pixel_values.shape[0]
-        num_patches_depth = patchified_pixel_values.shape[1] // (image_size // patch_size * image_size // patch_size)
-        num_patches_one_direction = image_size // patch_size
-        num_patches_another_direction = image_size // patch_size
+        # Calculate the original dimensions
+        num_channels = patch_dim // (self.tubelet_size * self.patch_size * self.patch_size)
+        depth = self.grid_size[0] * self.tubelet_size
+        height = self.grid_size[1] * self.patch_size
+        width = self.grid_size[2] * self.patch_size
 
-        patchified_pixel_values = patchified_pixel_values.reshape(
-            batch_size,
-            num_patches_depth,
-            num_patches_one_direction,
-            num_patches_another_direction,
-            tubelet_size,
-            patch_size,
-            patch_size,
-            num_channels
-        )
-        patchified_pixel_values = torch.einsum("bthwdpqc->btdchpwq", patchified_pixel_values)
-        pixel_values = patchified_pixel_values.reshape(
-            batch_size,
-            num_patches_depth * tubelet_size,
-            num_channels,
-            num_patches_one_direction * patch_size,
-            num_patches_another_direction * patch_size
-        )
-        return pixel_values
-    
+        # Reshape patches to the intermediate form
+        patches = patchified_pixel_values.view(batch_size, self.grid_size[0], self.grid_size[1], self.grid_size[2], num_channels, self.tubelet_size, self.patch_size, self.patch_size)
+        
+        # Permute and reshape to restore the original shape
+        patches = patches.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous().view(batch_size, num_channels, depth, height, width)
+
+        return patches
+
     def forward_loss(self, pixel_values, pred, mask):
         """
         Args:
-            pixel_values (`torch.FloatTensor` of shape `(batch_size, depth, num_channels, height, width)`):
+            pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, depth, height, width)`):
                 Pixel values.
             pred (`torch.FloatTensor` of shape `(batch_size, num_patches, patch_size**2 * num_channels)`:
                 Predicted pixel values.
@@ -1011,23 +971,10 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         # Compute reconstruction loss
         loss = (pred - frames_norm) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
-        reconstruction_loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        loss = loss.sum(dim=-1)  
+        reconstruction_loss = (loss * mask).sum() / mask.sum().item()  # mean loss on removed patches
 
-        # Unpatchify predicted patches to get reconstructed images
-        imgs_hat = self.unpatchify(pred)
-
-        # Normalize target and predicted images
-        target_normalized = (pixel_values - pixel_values.mean(dim=(1, 2, 3), keepdim=True)) / (pixel_values.var(dim=(1, 2, 3), keepdim=True) + 1e-12) ** 0.5
-        pred_normalized = (imgs_hat - imgs_hat.mean(dim=(1, 2, 3), keepdim=True)) / (imgs_hat.var(dim=(1, 2, 3), keepdim=True) + 1e-12) ** 0.5
-
-        # Compute cross-correlation
-        cross_corrs = torch.sum(target_normalized * pred_normalized, dim=(1, 2, 3)) / (pixel_values[0].numel() - 1)
-        ncc = cross_corrs.mean()
-
-        # Combine losses
-        total_loss = (1 - self.config.ncc_weight) * reconstruction_loss + self.config.ncc_weight * (1 - ncc)
-        return total_loss
+        return reconstruction_loss
 
     @add_start_docstrings_to_model_forward(VIDEOMAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=VideoMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)
@@ -1106,169 +1053,36 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         )
 
 
-@add_start_docstrings(
-    """VideoMAE Model transformer with a video classification head on top (a linear layer on top of the average pooled hidden
-    states of all tokens) e.g. for ImageNet.""",
-    VIDEOMAE_START_DOCSTRING,
-)
-class VideoMAEForVideoClassification(VideoMAEPreTrainedModel):
-    def __init__(self, config):
-        super().__init__(config)
+def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
+    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
 
-        self.num_labels = config.num_labels
-        self.videomae = VideoMAEModel(config)
+    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
+    the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
+    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956 ... I've opted for
+    changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
+    'survival rate' as the argument.
 
-        # Classifier head
-        self.fc_norm = nn.LayerNorm(config.hidden_size) if config.use_mean_pooling else None
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
-
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    @add_start_docstrings_to_model_forward(VIDEOMAE_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=ImageClassifierOutput, config_class=_CONFIG_FOR_DOC)
-    def forward(
-        self,
-        pixel_values: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, ImageClassifierOutput]:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-            Labels for computing the image classification/regression loss. Indices should be in `[0, ...,
-            config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-            `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-
-        Returns:
-
-        Examples:
-
-        ```python
-        >>> import av
-        >>> import torch
-        >>> import numpy as np
-
-        >>> from transformers import AutoImageProcessor, VideoMAEForVideoClassification
-        >>> from huggingface_hub import hf_hub_download
-
-        >>> np.random.seed(0)
+    """
+    if drop_prob == 0. or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
+    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
+    if keep_prob > 0.0 and scale_by_keep:
+        random_tensor.div_(keep_prob)
+    return x * random_tensor
 
 
-        >>> def read_video_pyav(container, indices):
-        ...     '''
-        ...     Decode the video with PyAV decoder.
-        ...     Args:
-        ...         container (`av.container.input.InputContainer`): PyAV container.
-        ...         indices (`List[int]`): List of frame indices to decode.
-        ...     Returns:
-        ...         result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
-        ...     '''
-        ...     frames = []
-        ...     container.seek(0)
-        ...     start_index = indices[0]
-        ...     end_index = indices[-1]
-        ...     for i, frame in enumerate(container.decode(video=0)):
-        ...         if i > end_index:
-        ...             break
-        ...         if i >= start_index and i in indices:
-        ...             frames.append(frame)
-        ...     return np.stack([x.to_ndarray(format="rgb24") for x in frames])
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    """
+    def __init__(self, drop_prob: float = 0., scale_by_keep: bool = True):
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+        self.scale_by_keep = scale_by_keep
 
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
 
-        >>> def sample_frame_indices(clip_len, frame_sample_rate, seg_len):
-        ...     '''
-        ...     Sample a given number of frame indices from the video.
-        ...     Args:
-        ...         clip_len (`int`): Total number of frames to sample.
-        ...         frame_sample_rate (`int`): Sample every n-th frame.
-        ...         seg_len (`int`): Maximum allowed index of sample's last frame.
-        ...     Returns:
-        ...         indices (`List[int]`): List of sampled frame indices
-        ...     '''
-        ...     converted_len = int(clip_len * frame_sample_rate)
-        ...     end_idx = np.random.randint(converted_len, seg_len)
-        ...     start_idx = end_idx - converted_len
-        ...     indices = np.linspace(start_idx, end_idx, num=clip_len)
-        ...     indices = np.clip(indices, start_idx, end_idx - 1).astype(np.int64)
-        ...     return indices
-
-
-        >>> # video clip consists of 300 frames (10 seconds at 30 FPS)
-        >>> file_path = hf_hub_download(
-        ...     repo_id="nielsr/video-demo", filename="eating_spaghetti.mp4", repo_type="dataset"
-        ... )
-        >>> container = av.open(file_path)
-
-        >>> # sample 16 frames
-        >>> indices = sample_frame_indices(clip_len=16, frame_sample_rate=1, seg_len=container.streams.video[0].frames)
-        >>> video = read_video_pyav(container, indices)
-
-        >>> image_processor = AutoImageProcessor.from_pretrained("MCG-NJU/videomae-base-finetuned-kinetics")
-        >>> model = VideoMAEForVideoClassification.from_pretrained("MCG-NJU/videomae-base-finetuned-kinetics")
-
-        >>> inputs = image_processor(list(video), return_tensors="pt")
-
-        >>> with torch.no_grad():
-        ...     outputs = model(**inputs)
-        ...     logits = outputs.logits
-
-        >>> # model predicts one of the 400 Kinetics-400 classes
-        >>> predicted_label = logits.argmax(-1).item()
-        >>> print(model.config.id2label[predicted_label])
-        eating spaghetti
-        ```"""
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.videomae(
-            pixel_values,
-            head_mask=head_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        sequence_output = outputs[0]
-
-        if self.fc_norm is not None:
-            sequence_output = self.fc_norm(sequence_output.mean(1))
-        else:
-            sequence_output = sequence_output[:, 0]
-
-        logits = self.classifier(sequence_output)
-
-        loss = None
-        if labels is not None:
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
-
-            if self.config.problem_type == "regression":
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = loss_fct(logits, labels)
-            elif self.config.problem_type == "single_label_classification":
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return ((loss,) + output) if loss is not None else output
-
-        return ImageClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
+    def extra_repr(self):
+        return f'drop_prob={round(self.drop_prob,3):0.3f}'
