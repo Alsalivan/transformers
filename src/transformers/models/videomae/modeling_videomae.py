@@ -168,6 +168,7 @@ def create_positional_embeddings(num_patches_x, num_patches_y, num_patches_t, em
     positional_embeddings = t_embeddings + hw_embeddings
     return positional_embeddings.flatten(0, 1).unsqueeze(0)
 
+
 def original_positional_embeddings(n_position, d_hid): 
     ''' Sinusoid position encoding table ''' 
     # TODO: make it with torch instead of numpy 
@@ -180,6 +181,51 @@ def original_positional_embeddings(n_position, d_hid):
 
     return torch.tensor(sinusoid_table,dtype=torch.float, requires_grad=False).unsqueeze(0) 
 
+
+def get_multi_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
+    """
+    grid_size: int of the grid (..., H, W)
+    embed_dim: output dimension for each position
+    pos_embed: [np.prod(grid_size), embed_dim] or [1+np.prod(grid_size), embed_dim] (w/ or w/o cls_token)
+    """
+    grid_dim = len(grid_size)
+    assert grid_dim >= 2, "Grid_size should be at least 2D"
+    assert embed_dim % (grid_dim * 2) == 0, "Each dimension has 2 channels (sin, cos)"
+
+    grid = torch.meshgrid(*[torch.arange(s, dtype=torch.float32) for s in grid_size], indexing='ij')  # (S, T, H, W)
+    grid = torch.stack(grid, dim=0)  # (4, S, T, H, W)
+    pos_embed = get_multi_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token:
+        pos_embed = torch.concatenate([torch.zeros([1, embed_dim]), pos_embed], dim=0)
+    return pos_embed.unsqueeze(0)
+
+def get_multi_sincos_pos_embed_from_grid(embed_dim, grid):
+    # use half of dimensions to encode grid
+    grid_dim = len(grid.shape) - 1
+    emb = [get_1d_sincos_pos_embed_from_grid(embed_dim // grid_dim, grid[i]) for i in range(grid.shape[0])]
+    emb = torch.concatenate(emb, dim=1) # [(S*T*H*W, D/4)] -> (S*T*H*W, D)
+    return emb
+
+
+def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+    """
+    embed_dim: output dimension for each position
+    pos: a list of positions to be encoded: size (M,)
+    out: (M, D)
+    """
+    assert embed_dim % 2 == 0
+    omega = torch.arange(embed_dim // 2, dtype=torch.float)
+    omega /= embed_dim / 2.
+    omega = 1. / 10000**omega  # (D/2,)
+
+    pos = pos.reshape(-1)  # (M,)
+    out = torch.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+
+    emb_sin = torch.sin(out) # (M, D/2)
+    emb_cos = torch.cos(out) # (M, D/2)
+
+    emb = torch.concatenate([emb_sin, emb_cos], dim=1)  # (M, D)
+    return emb
 
 class VideoMAEEmbeddings(nn.Module):
     """
@@ -198,8 +244,8 @@ class VideoMAEEmbeddings(nn.Module):
         if config.use_learnable_pos_emb:
             self.position_embeddings = nn.Parameter(torch.zeros(1, self.grid_size[0] * self.grid_size[1] * self.grid_size[2], config.hidden_size), requires_grad=True)
         else:
-            self.position_embeddings = nn.Parameter(original_positional_embeddings(n_position=self.grid_size[0] * self.grid_size[1] * self.grid_size[2],
-                                                                                   d_hid=config.hidden_size), requires_grad=False)
+            self.position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
+                                                                               embed_dim=config.hidden_size), requires_grad=False)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.config = config
@@ -301,29 +347,35 @@ class VideoMAESelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = nn.Linear(config.hidden_size, self.all_head_size)
-        self.key = nn.Linear(config.hidden_size, self.all_head_size)
-        self.value = nn.Linear(config.hidden_size, self.all_head_size)
+        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
 
-        self.attn_dropout = nn.Dropout(config.attention_probs_dropout_prob)
+        if config.qkv_bias:
+            self.q_bias = nn.Parameter(torch.zeros(self.all_head_size))
+            self.v_bias = nn.Parameter(torch.zeros(self.all_head_size))
+        else:
+            self.q_bias = None
+            self.v_bias = None
 
-        self.softmax = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        x = x.view(*new_x_shape)
+        x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
 
     def forward(
         self, hidden_states, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        mixed_query_layer = self.query(hidden_states)
-        mixed_key_layer = self.key(hidden_states)
-        mixed_value_layer = self.value(hidden_states)
+        k_bias = torch.zeros_like(self.v_bias, requires_grad=False) if self.q_bias is not None else None
+        keys = nn.functional.linear(input=hidden_states, weight=self.key.weight, bias=k_bias)
+        values = nn.functional.linear(input=hidden_states, weight=self.value.weight, bias=self.v_bias)
+        queries = nn.functional.linear(input=hidden_states, weight=self.query.weight, bias=self.q_bias)
 
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
+        key_layer = self.transpose_for_scores(keys)
+        value_layer = self.transpose_for_scores(values)
+        query_layer = self.transpose_for_scores(queries)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -331,26 +383,25 @@ class VideoMAESelfAttention(nn.Module):
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
         # Normalize the attention scores to probabilities.
-        attention_probs = self.softmax(attention_scores)
+        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
-        attention_probs = self.attn_dropout(attention_probs)
+        attention_probs = self.dropout(attention_probs)
 
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
         context_layer = torch.matmul(attention_probs, value_layer)
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
 
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
+        context_layer = context_layer.view(new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs
-
 
 # Copied from transformers.models.vit.modeling_vit.ViTSelfOutput with ViT->VideoMAE
 class VideoMAESelfOutput(nn.Module):
@@ -410,7 +461,8 @@ class VideoMAEAttention(nn.Module):
 
         attention_output = self.output(self_outputs[0])
 
-        return (attention_output, self_outputs[1]) if output_attentions else (attention_output, )
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        return outputs
 
 
 # Copied from transformers.models.vit.modeling_vit.ViTIntermediate ViT->VideoMAE
@@ -452,16 +504,15 @@ class VideoMAEOutput(nn.Module):
 class VideoMAELayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
 
-    def __init__(self, config: VideoMAEConfig, drop_path_rate=0.) -> None:
+    def __init__(self, config: VideoMAEConfig) -> None:
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = VideoMAEAttention(config)
-
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
         
         self.intermediate = VideoMAEIntermediate(config)
         self.output = VideoMAEOutput(config)
+
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
@@ -477,8 +528,7 @@ class VideoMAELayer(nn.Module):
             output_attentions=output_attentions,
         )
         attention_output = self_attention_outputs[0]
-
-        attention_output = self.drop_path(attention_output)
+        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
         hidden_states = attention_output + hidden_states
@@ -489,10 +539,7 @@ class VideoMAELayer(nn.Module):
         # second residual connection is done here
         layer_output = self.output(layer_output, hidden_states)
 
-        if output_attentions:
-            outputs = (layer_output, self_attention_outputs[1:])
-        else:
-            outputs = (layer_output, )
+        outputs = (layer_output,) + outputs
 
         return outputs
 
@@ -503,8 +550,7 @@ class VideoMAEEncoder(nn.Module):
         super().__init__()
         self.config = config
         depth = config.num_hidden_layers
-        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]
-        self.layer = nn.ModuleList([VideoMAELayer(config, drop_path_rate=dpr[i]) for i in range(depth)])
+        self.layer = nn.ModuleList([VideoMAELayer(config) for i in range(depth)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -790,13 +836,11 @@ class VideoMAEDecoder(nn.Module):
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
 
-        self.decoder_position_embeddings = nn.Parameter(original_positional_embeddings(n_position=self.grid_size[0] * self.grid_size[1] * self.grid_size[2],
-                                                                                       d_hid=config.decoder_hidden_size), requires_grad=False)
+        self.decoder_position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
+                                                                                   embed_dim=config.decoder_hidden_size), requires_grad=False)
 
         depth = decoder_config.num_hidden_layers
-        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]
-
-        self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config, drop_path_rate=dpr[i]) for i in range(depth)])
+        self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config) for i in range(depth)])
 
         self.layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
         self.head = nn.Linear(config.decoder_hidden_size, patch_size*patch_size*tubelet_size, bias=True)
@@ -878,7 +922,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         self.videomae = VideoMAEModel(config)
 
-        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=False)
+        self.encoder_to_decoder = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
 
         self.patch_size = self.videomae.embeddings.patch_size
         self.tubelet_size = self.videomae.embeddings.tubelet_size
@@ -960,7 +1004,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
                 Tensor indicating which patches are masked (1) and which are not (0).
 
         Returns:
-            `torch.FloatTensor`: Pixel reconstruction loss with optional NCC regularization.
+            `torch.FloatTensor`: Pixel reconstruction loss
         """
         target = self.patchify(pixel_values)
 
@@ -971,8 +1015,12 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
 
         # Compute reconstruction loss
         loss = (pred - frames_norm) ** 2
-        loss = loss.sum(dim=-1)  
-        reconstruction_loss = (loss * mask).sum() / mask.sum().item()  # mean loss on removed patches
+        loss = loss.mean(dim=-1)
+
+        if self.config.mask_loss:
+            reconstruction_loss = (loss * mask).sum() / mask.sum().item()  # mean loss on removed patches 
+        else:
+            reconstruction_loss = loss.mean()
 
         return reconstruction_loss
 
@@ -1051,38 +1099,3 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
-def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
-    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
-
-    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
-    the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
-    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956 ... I've opted for
-    changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
-    'survival rate' as the argument.
-
-    """
-    if drop_prob == 0. or not training:
-        return x
-    keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
-    random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
-    if keep_prob > 0.0 and scale_by_keep:
-        random_tensor.div_(keep_prob)
-    return x * random_tensor
-
-
-class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
-    """
-    def __init__(self, drop_prob: float = 0., scale_by_keep: bool = True):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
-        self.scale_by_keep = scale_by_keep
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
-
-    def extra_repr(self):
-        return f'drop_prob={round(self.drop_prob,3):0.3f}'
