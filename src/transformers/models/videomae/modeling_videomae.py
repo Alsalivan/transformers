@@ -1014,7 +1014,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
             frames_norm = target
 
         # Compute reconstruction loss
-        loss = (pred - frames_norm) ** 2
+        loss = torch.nn.functional.mse_loss(pred, frames_norm, reduction='none')
         loss = loss.mean(dim=-1)
 
         if self.config.mask_loss:
