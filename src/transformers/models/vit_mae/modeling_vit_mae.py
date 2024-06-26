@@ -206,10 +206,8 @@ class ViTMAEEmbeddings(nn.Module):
         self.num_patches = self.patch_embeddings.num_patches
         self.grid_size = self.patch_embeddings.grid_size
 
-        self.position_embeddings = get_2d_sincos_pos_embed(embed_dim=config.hidden_size, grid_size=self.grid_size,
-                                                           add_cls_token=True)
-        self.position_embeddings.requires_grad_(False)
-
+        self.position_embeddings = nn.Parameter(get_2d_sincos_pos_embed(embed_dim=config.hidden_size, grid_size=self.grid_size,
+                                                                        add_cls_token=True), requires_grad=False)
         self.config = config
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
@@ -245,7 +243,7 @@ class ViTMAEEmbeddings(nn.Module):
         batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        position_embeddings = self.position_embeddings.expand(batch_size, -1, -1).type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1, embed_dim)
+        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1, embed_dim)
 
         # add pos embed w/o cls token
         embeddings = embeddings + position_embeddings[:, 1:, :]
@@ -321,9 +319,16 @@ class ViTMAESelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
-        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
-        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
+        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=False)
+
+        if config.qkv_bias:
+            self.q_bias = nn.Parameter(torch.zeros(self.all_head_size))
+            self.v_bias = nn.Parameter(torch.zeros(self.all_head_size))
+        else:
+            self.q_bias = None
+            self.v_bias = None
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
@@ -335,11 +340,14 @@ class ViTMAESelfAttention(nn.Module):
     def forward(
         self, hidden_states, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        mixed_query_layer = self.query(hidden_states)
+        k_bias = torch.zeros_like(self.v_bias, requires_grad=False) if self.q_bias is not None else None
+        keys = nn.functional.linear(input=hidden_states, weight=self.key.weight, bias=k_bias)
+        values = nn.functional.linear(input=hidden_states, weight=self.value.weight, bias=self.v_bias)
+        queries = nn.functional.linear(input=hidden_states, weight=self.query.weight, bias=self.q_bias)
 
-        key_layer = self.transpose_for_scores(self.key(hidden_states))
-        value_layer = self.transpose_for_scores(self.value(hidden_states))
-        query_layer = self.transpose_for_scores(mixed_query_layer)
+        key_layer = self.transpose_for_scores(keys)
+        value_layer = self.transpose_for_scores(values)
+        query_layer = self.transpose_for_scores(queries)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -380,8 +388,8 @@ class ViTMAESelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(input_tensor)
         hidden_states = self.dropout(hidden_states)
 
         return hidden_states
@@ -421,7 +429,7 @@ class ViTMAEAttention(nn.Module):
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
         self_outputs = self.attention(hidden_states, head_mask, output_attentions)
 
-        attention_output = self.output(self_outputs[0], hidden_states)
+        attention_output = self.output(self_outputs[0])
 
         outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
@@ -432,7 +440,7 @@ class ViTMAEIntermediate(nn.Module):
     def __init__(self, config: ViTMAEConfig) -> None:
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
-        # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob) # ommit this for the orignal BERT implement
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -441,7 +449,7 @@ class ViTMAEIntermediate(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
-        # hidden_states = self.dropout(hidden_states)
+        hidden_states = self.dropout(hidden_states)
 
         return hidden_states
 
@@ -471,8 +479,10 @@ class ViTMAELayer(nn.Module):
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = ViTMAEAttention(config)
+
         self.intermediate = ViTMAEIntermediate(config)
         self.output = ViTMAEOutput(config)
+
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
@@ -723,11 +733,10 @@ class ViTMAEDecoder(nn.Module):
     def __init__(self, config, num_patches, grid_size):
         super().__init__()
         self.decoder_embed = nn.Linear(config.hidden_size, config.decoder_hidden_size, bias=True)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
         
-        self.decoder_position_embeddings = get_2d_sincos_pos_embed(embed_dim=config.decoder_hidden_size, 
-                                                                   grid_size=grid_size, add_cls_token=True)
-        self.decoder_position_embeddings.requires_grad_(False)
+        self.decoder_position_embeddings = nn.Parameter(get_2d_sincos_pos_embed(embed_dim=config.decoder_hidden_size, 
+                                                                                grid_size=grid_size, add_cls_token=True), requires_grad=False)
 
         decoder_config = deepcopy(config)
         decoder_config.hidden_size = config.decoder_hidden_size
@@ -765,7 +774,7 @@ class ViTMAEDecoder(nn.Module):
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
 
         # add pos embed
-        position_embeddings = self.decoder_position_embeddings.expand(x.shape[0], -1, -1).type_as(x).to(x.device).clone().detach()
+        position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device).clone().detach()
         hidden_states = x + position_embeddings
 
         # apply Transformer layers (blocks)
@@ -931,34 +940,25 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
                 Tensor indicating which patches are masked (1) and which are not (0).
 
         Returns:
-            `torch.FloatTensor`: Pixel reconstruction loss with optional NCC regularization.
+            `torch.FloatTensor`: Pixel reconstruction loss
         """
         target = self.patchify(pixel_values)
+        
         if self.config.norm_pix_loss:
             mean = target.mean(dim=-1, keepdim=True)
             var = target.var(dim=-1, keepdim=True)
             target = (target - mean) / (var + 1e-12) ** 0.5
 
         # Compute reconstruction loss
-        loss = (pred - target) ** 2
-        loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
-        reconstruction_loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
+        loss = torch.nn.functional.mse_loss(pred, target, reduction='none')
+        loss = loss.mean(dim=-1)  # mean loss per patch  # [N, L]
 
-        # Compute NCC regularization
-        imgs_hat = self.unpatchify(pred)
-        target_normalized = (pixel_values - pixel_values.mean(dim=-1, keepdim=True)) / (pixel_values.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
-        pred_normalized = (imgs_hat - imgs_hat.mean(dim=-1, keepdim=True)) / (imgs_hat.var(dim=-1, keepdim=True) + 1e-12) ** 0.5
+        if self.config.mask_loss:
+            reconstruction_loss = (loss * mask).sum() / mask.sum().item()  # mean loss on removed patches 
+        else:
+            reconstruction_loss = loss.mean()
 
-        nb_of_signals = 1
-        for dim in range(pixel_values.dim()-1): # all but the last dimension (which is the actual signal)
-            nb_of_signals = nb_of_signals * pixel_values.shape[dim]
-
-        cross_corrs = (1.0 / (pixel_values.shape[-1] - 1)) * torch.sum(target_normalized * pred_normalized, dim=-1)
-        ncc = cross_corrs.sum() / nb_of_signals
-
-        # Combine losses
-        total_loss = (1 - self.config.ncc_weight) * reconstruction_loss + self.config.ncc_weight * (1 - ncc)
-        return total_loss
+        return reconstruction_loss
 
     @add_start_docstrings_to_model_forward(VIT_MAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=ViTMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)
