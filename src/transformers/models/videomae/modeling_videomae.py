@@ -26,10 +26,9 @@ import torch
 import torch.utils.checkpoint
 import torch.nn.functional as F
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from ...activations import ACT2FN
-from ...modeling_outputs import BaseModelOutput, ImageClassifierOutput
+from ...modeling_outputs import BaseModelOutput
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from ...utils import (
@@ -135,54 +134,9 @@ class VideoMAEPatchEmbeddings(nn.Module):
         # (batch_size, num_channels, num_frames, height, width)
         embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return embeddings
-    
-# sin-cos position encoding
-# https://github.com/jadore801120/attention-is-all-you-need-pytorch/blob/master/transformer/Models.py#L31
-def get_sinusoid_encoding_table(n_position, d_hid):
-    """Generate a sinusoid encoding table with PyTorch.
-
-    Args:
-        n_position (int): Number of positions.
-        d_hid (int): Dimensionality of the hidden layer.
-
-    Returns:
-        torch.Tensor: A tensor containing the positional encodings.
-    """
-    position = torch.arange(n_position).unsqueeze(1).float()
-    div_term = torch.pow(10000, torch.arange(0, d_hid, 2).float() / (d_hid / 2))
-    angle_rads = position / div_term.unsqueeze(0)
-
-    sinusoid_table = torch.zeros(n_position, d_hid)
-    sinusoid_table[:, 0::2] = torch.sin(angle_rads)  # Apply sin to even indices: 2i
-    sinusoid_table[:, 1::2] = torch.cos(angle_rads)  # Apply cos to odd indices: 2i+1
-
-    return sinusoid_table
-
-def create_positional_embeddings(num_patches_x, num_patches_y, num_patches_t, embed_dim):
-    t_embeddings = get_sinusoid_encoding_table(num_patches_t, embed_dim)
-    hw_embeddings = get_sinusoid_encoding_table(num_patches_x * num_patches_y, embed_dim)
-
-    t_embeddings = t_embeddings.unsqueeze(1).repeat(1, num_patches_x * num_patches_y, 1)
-    hw_embeddings = hw_embeddings.unsqueeze(0).repeat(num_patches_t, 1, 1)
-    
-    positional_embeddings = t_embeddings + hw_embeddings
-    return positional_embeddings.flatten(0, 1).unsqueeze(0)
 
 
-def original_positional_embeddings(n_position, d_hid): 
-    ''' Sinusoid position encoding table ''' 
-    # TODO: make it with torch instead of numpy 
-    def get_position_angle_vec(position): 
-        return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)] 
-
-    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)]) 
-    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2]) # dim 2i 
-    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2]) # dim 2i+1 
-
-    return torch.tensor(sinusoid_table,dtype=torch.float, requires_grad=False).unsqueeze(0) 
-
-
-def get_multi_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
+def get_multi_sincos_pos_embed(embed_dim, grid_size, add_cls_token=False):
     """
     grid_size: int of the grid (..., H, W)
     embed_dim: output dimension for each position
@@ -195,7 +149,7 @@ def get_multi_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
     grid = torch.meshgrid(*[torch.arange(s, dtype=torch.float32) for s in grid_size], indexing='ij')  # (S, T, H, W)
     grid = torch.stack(grid, dim=0)  # (4, S, T, H, W)
     pos_embed = get_multi_sincos_pos_embed_from_grid(embed_dim, grid)
-    if cls_token:
+    if add_cls_token:
         pos_embed = torch.concatenate([torch.zeros([1, embed_dim]), pos_embed], dim=0)
     return pos_embed.unsqueeze(0)
 
@@ -205,7 +159,6 @@ def get_multi_sincos_pos_embed_from_grid(embed_dim, grid):
     emb = [get_1d_sincos_pos_embed_from_grid(embed_dim // grid_dim, grid[i]) for i in range(grid.shape[0])]
     emb = torch.concatenate(emb, dim=1) # [(S*T*H*W, D/4)] -> (S*T*H*W, D)
     return emb
-
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
@@ -227,6 +180,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     emb = torch.concatenate([emb_sin, emb_cos], dim=1)  # (M, D)
     return emb
 
+
 class VideoMAEEmbeddings(nn.Module):
     """
     Construct the patch and position embeddings.
@@ -236,6 +190,8 @@ class VideoMAEEmbeddings(nn.Module):
         super().__init__()
 
         self.patch_embeddings = VideoMAEPatchEmbeddings(config)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
+
         self.grid_size = self.patch_embeddings.grid_size
         self.patch_size = self.patch_embeddings.patch_size
         self.tubelet_size = self.patch_embeddings.tubelet_size
@@ -245,7 +201,7 @@ class VideoMAEEmbeddings(nn.Module):
             self.position_embeddings = nn.Parameter(torch.zeros(1, self.grid_size[0] * self.grid_size[1] * self.grid_size[2], config.hidden_size), requires_grad=True)
         else:
             self.position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
-                                                                               embed_dim=config.hidden_size), requires_grad=False)
+                                                                               embed_dim=config.hidden_size, add_cls_token=True), requires_grad=False)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.config = config
@@ -282,18 +238,25 @@ class VideoMAEEmbeddings(nn.Module):
 
         return sequence_masked, mask, ids_restore
 
-    def forward(self, pixel_values, apply_masking=True):
+    def forward(self, pixel_values, noise=None, apply_masking=True):
+        batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        # add position embeddings
-        expanded_position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach()
-        embeddings = embeddings + expanded_position_embeddings
+        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1, embed_dim)
 
-        # masking: length -> length * config.mask_rati[o
+        # add pos embed w/o cls token
+        embeddings = embeddings + position_embeddings[:, 1:, :]
+
+        # masking: length -> length * config.mask_ratio
         if apply_masking:
-            embeddings, mask, ids_restore = self.random_masking(embeddings)
+            embeddings, mask, ids_restore = self.random_masking(embeddings, noise)
         else:
             mask, ids_restore = None, None
+
+        # Append the CLS token to the sequence
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        cls_tokens = cls_tokens + position_embeddings[:, :1, :]
+        embeddings = torch.cat((cls_tokens, embeddings), dim=1)
 
         embeddings = self.dropout(embeddings)
 
@@ -837,7 +800,7 @@ class VideoMAEDecoder(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
 
         self.decoder_position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
-                                                                                   embed_dim=config.decoder_hidden_size), requires_grad=False)
+                                                                                   embed_dim=config.decoder_hidden_size, add_cls_token=True), requires_grad=False)
 
         depth = decoder_config.num_hidden_layers
         self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config) for i in range(depth)])
@@ -859,19 +822,18 @@ class VideoMAEDecoder(nn.Module):
         batch_size, num_visible, hidden_dim = hidden_states.shape
         original_length = ids_restore.shape[1]
 
-        num_mask_tokens = original_length - num_visible
+        num_mask_tokens = original_length + 1 - num_visible # +1 because of cls token
 
         mask_tokens = self.mask_token.repeat(batch_size, num_mask_tokens, 1)
 
-        hidden_states_ = torch.cat([hidden_states, mask_tokens], dim=1)  # Include visible tokens and mask tokens
+        hidden_states_ = torch.cat([hidden_states[:, 1:, :], mask_tokens], dim=1) # no cls token
 
         # Unshuffle to restore the original order of tokens including the newly added mask tokens
-        x = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_dim))
+        hidden_states_ = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_dim))
+        x = torch.cat([hidden_states[:, :1, :], hidden_states_], dim=1) # append cls token
 
-        expanded_position_embeddings = self.decoder_position_embeddings.type_as(hidden_states)
-        expanded_position_embeddings = expanded_position_embeddings.to(hidden_states.device).clone().detach()
-        
-        hidden_states = x + expanded_position_embeddings
+        position_embeddings = self.decoder_position_embeddings.type_as(x).to(hidden_states.device).clone().detach()
+        hidden_states = x + position_embeddings
 
         # apply Transformer layers (blocks)
         all_hidden_states = () if output_hidden_states else None
@@ -902,6 +864,9 @@ class VideoMAEDecoder(nn.Module):
         hidden_states = self.layernorm(hidden_states)
         logits = self.head(hidden_states)
 
+        # remove cls token
+        logits = logits[:, 1:, :]
+
         if not return_dict:
             return tuple(v for v in [logits, all_hidden_states, all_self_attentions] if v is not None)
         return VideoMAEDecoderOutput(
@@ -929,9 +894,6 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         self.grid_size = self.videomae.embeddings.grid_size
 
         self.decoder = VideoMAEDecoder(config, grid_size=self.grid_size, patch_size=self.patch_size, tubelet_size=self.tubelet_size)
-
-        self.patch_layernorm = nn.LayerNorm(normalized_shape=(self.patch_size*self.patch_size*self.tubelet_size*config.num_channels,),
-                                            eps=config.layer_norm_eps, elementwise_affine=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1008,13 +970,8 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         """
         target = self.patchify(pixel_values)
 
-        if self.config.norm_pix_loss:
-            frames_norm = self.patch_layernorm(target)
-        else:
-            frames_norm = target
-
         # Compute reconstruction loss
-        loss = torch.nn.functional.mse_loss(pred, frames_norm, reduction='none')
+        loss = torch.nn.functional.mse_loss(pred, target, reduction='none')
         loss = loss.mean(dim=-1)
 
         if self.config.mask_loss:
