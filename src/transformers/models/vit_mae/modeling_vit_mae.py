@@ -953,12 +953,24 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         loss = torch.nn.functional.mse_loss(pred, target, reduction='none')
         loss = loss.mean(dim=-1)  # mean loss per patch  # [N, L]
 
+        # REGULARIZATION (using normalized correlation coefficient of the actual signals)
+        imgs_hat = self.unpatchify(pred)
+        target_normalized = (pixel_values - pixel_values.mean(dim=-1, keepdim=True)) / (pixel_values.var(dim=-1, keepdim=True) + 1e-12)**0.5
+        pred_normalized = (imgs_hat - imgs_hat.var(dim=-1, keepdim=True)) / (imgs_hat.var(dim=-1, keepdim=True) + 1e-12)**0.5
+
+        nb_of_signals = 1
+        for dim in range(pixel_values.dim()-1): # all but the last dimension (which is the actual signal)
+            nb_of_signals = nb_of_signals * pixel_values.shape[dim]
+
+        cross_corrs = (1.0 / (pixel_values.shape[-1]-1)) * torch.sum(target_normalized * pred_normalized, dim=-1)
+        ncc = cross_corrs.sum() / nb_of_signals
+
         if self.config.mask_loss:
             reconstruction_loss = (loss * mask).sum() / mask.sum().item()  # mean loss on removed patches 
         else:
             reconstruction_loss = loss.mean()
 
-        return reconstruction_loss
+        return (1-self.config.ncc_weight)*reconstruction_loss + self.config.ncc_weight*(1-ncc)
 
     @add_start_docstrings_to_model_forward(VIT_MAE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=ViTMAEForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)

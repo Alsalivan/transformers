@@ -15,7 +15,6 @@
 """ PyTorch VideoMAE (masked autoencoder) model."""
 
 
-import collections.abc
 import math
 from copy import deepcopy
 from dataclasses import dataclass
@@ -42,6 +41,7 @@ from ...utils.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .configuration_videomae import VideoMAEConfig
 from ...models.vit_mae.modeling_vit_mae import ViTMAEModelOutput, ViTMAEForPreTrainingOutput
 
+from ecgcmr.utils.positional_embeddings import get_multi_sincos_pos_embed
 
 logger = logging.get_logger(__name__)
 
@@ -135,73 +135,35 @@ class VideoMAEPatchEmbeddings(nn.Module):
         embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return embeddings
 
-
-def get_multi_sincos_pos_embed(embed_dim, grid_size, add_cls_token=False):
-    """
-    grid_size: int of the grid (..., H, W)
-    embed_dim: output dimension for each position
-    pos_embed: [np.prod(grid_size), embed_dim] or [1+np.prod(grid_size), embed_dim] (w/ or w/o cls_token)
-    """
-    grid_dim = len(grid_size)
-    assert grid_dim >= 2, "Grid_size should be at least 2D"
-    assert embed_dim % (grid_dim * 2) == 0, "Each dimension has 2 channels (sin, cos)"
-
-    grid = torch.meshgrid(*[torch.arange(s, dtype=torch.float32) for s in grid_size], indexing='ij')  # (S, T, H, W)
-    grid = torch.stack(grid, dim=0)  # (4, S, T, H, W)
-    pos_embed = get_multi_sincos_pos_embed_from_grid(embed_dim, grid)
-    if add_cls_token:
-        pos_embed = torch.concatenate([torch.zeros([1, embed_dim]), pos_embed], dim=0)
-    return pos_embed.unsqueeze(0)
-
-def get_multi_sincos_pos_embed_from_grid(embed_dim, grid):
-    # use half of dimensions to encode grid
-    grid_dim = len(grid.shape) - 1
-    emb = [get_1d_sincos_pos_embed_from_grid(embed_dim // grid_dim, grid[i]) for i in range(grid.shape[0])]
-    emb = torch.concatenate(emb, dim=1) # [(S*T*H*W, D/4)] -> (S*T*H*W, D)
-    return emb
-
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
-    """
-    embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
-    out: (M, D)
-    """
-    assert embed_dim % 2 == 0
-    omega = torch.arange(embed_dim // 2, dtype=torch.float)
-    omega /= embed_dim / 2.
-    omega = 1. / 10000**omega  # (D/2,)
-
-    pos = pos.reshape(-1)  # (M,)
-    out = torch.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
-
-    emb_sin = torch.sin(out) # (M, D/2)
-    emb_cos = torch.cos(out) # (M, D/2)
-
-    emb = torch.concatenate([emb_sin, emb_cos], dim=1)  # (M, D)
-    return emb
-
-
 class VideoMAEEmbeddings(nn.Module):
     """
     Construct the patch and position embeddings.
-
     """
     def __init__(self, config):
         super().__init__()
-
         self.patch_embeddings = VideoMAEPatchEmbeddings(config)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size)) if config.use_cls_token else None
 
         self.grid_size = self.patch_embeddings.grid_size
         self.patch_size = self.patch_embeddings.patch_size
         self.tubelet_size = self.patch_embeddings.tubelet_size
+
+        num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
+        if config.use_cls_token:
+            num_patches += 1
         
         # fixed sin-cos embedding
         if config.use_learnable_pos_emb:
-            self.position_embeddings = nn.Parameter(torch.zeros(1, self.grid_size[0] * self.grid_size[1] * self.grid_size[2], config.hidden_size), requires_grad=True)
+            self.position_embeddings = nn.Parameter(torch.zeros(1, num_patches, config.hidden_size), requires_grad=True)
         else:
-            self.position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
-                                                                               embed_dim=config.hidden_size, add_cls_token=True), requires_grad=False)
+            self.position_embeddings = nn.Parameter(
+                get_multi_sincos_pos_embed(
+                    grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
+                    embed_dim=config.hidden_size,
+                    add_cls_token=config.use_cls_token
+                    ),
+                requires_grad=False
+                )
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.config = config
@@ -242,21 +204,25 @@ class VideoMAEEmbeddings(nn.Module):
         batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1, embed_dim)
+        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1/num_patches, embed_dim)
+        
+        # Add position embeddings without cls token
+        if self.config.use_cls_token:
+            embeddings = embeddings + position_embeddings[:, 1:, :]
+        else:
+            embeddings = embeddings + position_embeddings
 
-        # add pos embed w/o cls token
-        embeddings = embeddings + position_embeddings[:, 1:, :]
-
-        # masking: length -> length * config.mask_ratio
+        # Masking: length -> length * config.mask_ratio
         if apply_masking:
             embeddings, mask, ids_restore = self.random_masking(embeddings, noise)
         else:
             mask, ids_restore = None, None
 
-        # Append the CLS token to the sequence
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-        cls_tokens = cls_tokens + position_embeddings[:, :1, :]
-        embeddings = torch.cat((cls_tokens, embeddings), dim=1)
+        if self.config.use_cls_token:
+            # Append the CLS token to the sequence
+            cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+            cls_tokens = cls_tokens + position_embeddings[:, :1, :]
+            embeddings = torch.cat((cls_tokens, embeddings), dim=1)
 
         embeddings = self.dropout(embeddings)
 
@@ -640,7 +606,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         self.embeddings = VideoMAEEmbeddings(config)
         self.encoder = VideoMAEEncoder(config)
 
-        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps) if config.use_cls_token else None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -771,7 +737,9 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs[0]
-        sequence_output = self.layernorm(sequence_output)
+
+        if self.config.use_cls_token:
+            sequence_output = self.layernorm(sequence_output)
 
         if not return_dict:
             return (sequence_output, mask, ids_restore) + encoder_outputs[1:]
@@ -799,8 +767,24 @@ class VideoMAEDecoder(nn.Module):
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
 
-        self.decoder_position_embeddings = nn.Parameter(get_multi_sincos_pos_embed(grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
-                                                                                   embed_dim=config.decoder_hidden_size, add_cls_token=True), requires_grad=False)
+        num_patches = grid_size[0] * grid_size[1] * grid_size[2]
+        if config.use_cls_token:
+            num_patches += 1
+
+        if config.use_learnable_pos_emb:
+            self.decoder_position_embeddings = nn.Parameter(
+                torch.zeros(1, num_patches, config.decoder_hidden_size),
+                requires_grad=True
+            )
+        else:
+            self.decoder_position_embeddings = nn.Parameter(
+                get_multi_sincos_pos_embed(
+                    grid_size=(self.grid_size[0], self.grid_size[1], self.grid_size[2]),
+                    embed_dim=config.decoder_hidden_size,
+                    add_cls_token=config.use_cls_token
+                ),
+                requires_grad=False
+            )
 
         depth = decoder_config.num_hidden_layers
         self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config) for i in range(depth)])
@@ -822,15 +806,25 @@ class VideoMAEDecoder(nn.Module):
         batch_size, num_visible, hidden_dim = hidden_states.shape
         original_length = ids_restore.shape[1]
 
-        num_mask_tokens = original_length + 1 - num_visible # +1 because of cls token
+        num_mask_tokens = original_length - num_visible
+
+        if self.config.use_cls_token:
+            num_mask_tokens += 1  # +1 because of cls token
 
         mask_tokens = self.mask_token.repeat(batch_size, num_mask_tokens, 1)
 
-        hidden_states_ = torch.cat([hidden_states[:, 1:, :], mask_tokens], dim=1) # no cls token
+        if self.config.use_cls_token:
+            hidden_states_ = torch.cat([hidden_states[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        else:
+            hidden_states_ = torch.cat([hidden_states, mask_tokens], dim=1)
 
         # Unshuffle to restore the original order of tokens including the newly added mask tokens
         hidden_states_ = torch.gather(hidden_states_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, hidden_dim))
-        x = torch.cat([hidden_states[:, :1, :], hidden_states_], dim=1) # append cls token
+
+        if self.config.use_cls_token:
+            x = torch.cat([hidden_states[:, :1, :], hidden_states_], dim=1)  # append cls token
+        else:
+            x = hidden_states_
 
         position_embeddings = self.decoder_position_embeddings.type_as(x).to(hidden_states.device).clone().detach()
         hidden_states = x + position_embeddings
@@ -864,8 +858,8 @@ class VideoMAEDecoder(nn.Module):
         hidden_states = self.layernorm(hidden_states)
         logits = self.head(hidden_states)
 
-        # remove cls token
-        logits = logits[:, 1:, :]
+        if self.config.use_cls_token:
+            logits = logits[:, 1:, :]  # remove cls token
 
         if not return_dict:
             return tuple(v for v in [logits, all_hidden_states, all_self_attentions] if v is not None)
