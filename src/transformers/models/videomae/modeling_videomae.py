@@ -107,10 +107,8 @@ class VideoMAEPatchEmbeddings(nn.Module):
     patch_size).
 
     """
-
     def __init__(self, config):
         super().__init__()
-
         num_channels = config.num_channels
         hidden_size = config.hidden_size
 
@@ -149,6 +147,7 @@ class VideoMAEEmbeddings(nn.Module):
         self.tubelet_size = self.patch_embeddings.tubelet_size
 
         num_patches = self.grid_size[0] * self.grid_size[1] * self.grid_size[2]
+
         if config.use_cls_token:
             num_patches += 1
         
