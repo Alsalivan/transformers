@@ -804,11 +804,11 @@ class VideoMAEDecoder(nn.Module):
     ):  
         batch_size, num_visible, hidden_dim = hidden_states.shape
         original_length = ids_restore.shape[1]
+        
+        if self.config.use_cls_token:
+            num_visible -= 1
 
         num_mask_tokens = original_length - num_visible
-
-        if self.config.use_cls_token:
-            num_mask_tokens += 1  # +1 because of cls token
 
         mask_tokens = self.mask_token.repeat(batch_size, num_mask_tokens, 1)
 
