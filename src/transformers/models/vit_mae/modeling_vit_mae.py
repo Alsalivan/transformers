@@ -193,7 +193,10 @@ class ViTMAEEmbeddings(nn.Module):
         batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1/num_patches, embed_dim)
+        if self.config.use_learnable_pos_emb:
+            position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device)
+        else:
+            position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).detach() # (b, num_patches+1/num_patches, embed_dim)
         
         # Add position embeddings without cls token
         if self.config.use_cls_token:
@@ -760,7 +763,11 @@ class ViTMAEDecoder(nn.Module):
             x = hidden_states_
 
         # add pos embed
-        position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device).clone().detach()
+        if self.config.use_learnable_pos_emb:
+            position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device)
+        else:
+            position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device).detach() # (b, num_patches+1/num_patches, embed_dim)
+        
         hidden_states = x + position_embeddings
 
         # apply Transformer layers (blocks)
