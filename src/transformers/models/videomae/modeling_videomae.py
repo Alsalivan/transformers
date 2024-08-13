@@ -151,7 +151,6 @@ class VideoMAEEmbeddings(nn.Module):
         if config.use_cls_token:
             num_patches += 1
         
-        # fixed sin-cos embedding
         if config.use_learnable_pos_emb:
             self.position_embeddings = nn.Parameter(torch.zeros(1, num_patches, config.hidden_size), requires_grad=True)
         else:
@@ -203,7 +202,10 @@ class VideoMAEEmbeddings(nn.Module):
         batch_size = pixel_values.shape[0]
         embeddings = self.patch_embeddings(pixel_values)
 
-        position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).clone().detach() # (b, num_patches+1/num_patches, embed_dim)
+        if self.config.use_learnable_pos_emb:
+            position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device)
+        else:
+            position_embeddings = self.position_embeddings.type_as(embeddings).to(embeddings.device).detach() # (b, num_patches+1/num_patches, embed_dim)
         
         # Add position embeddings without cls token
         if self.config.use_cls_token:
@@ -524,7 +526,6 @@ class VideoMAEEncoder(nn.Module):
             attentions=all_self_attentions,
         )
 
-
 class VideoMAEPreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
@@ -767,6 +768,7 @@ class VideoMAEDecoder(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_hidden_size), requires_grad=True)
 
         num_patches = grid_size[0] * grid_size[1] * grid_size[2]
+
         if config.use_cls_token:
             num_patches += 1
 
@@ -825,7 +827,11 @@ class VideoMAEDecoder(nn.Module):
         else:
             x = hidden_states_
 
-        position_embeddings = self.decoder_position_embeddings.type_as(x).to(hidden_states.device).clone().detach()
+        if self.config.use_learnable_pos_emb:
+            position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device)
+        else:
+            position_embeddings = self.decoder_position_embeddings.type_as(x).to(x.device).detach() # (b, num_patches+1/num_patches, embed_dim)
+        
         hidden_states = x + position_embeddings
 
         # apply Transformer layers (blocks)
