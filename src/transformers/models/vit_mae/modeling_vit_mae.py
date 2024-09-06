@@ -131,6 +131,43 @@ class ViTMAEForPreTrainingOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        """
+        Args:
+            drop_prob (float): Probability of dropping a path. Default: 0.0
+        """
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Tensor after applying DropPath.
+        """
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndimension() - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()  # binarize
+        output = x.div(keep_prob) * random_tensor
+        return output   
+
+class LayerScale(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.layerscale_c = nn.Parameter(config.layerscale_init_values * torch.ones(config.hidden_size))
+
+    def forward(self, x):
+        return x * self.layerscale_c
+
 class ViTMAEEmbeddings(nn.Module):
     """
     Construct the CLS token, position and patch embeddings.
@@ -396,8 +433,10 @@ class ViTMAEAttention(nn.Module):
 class ViTMAEIntermediate(nn.Module):
     def __init__(self, config: ViTMAEConfig) -> None:
         super().__init__()
+
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob) # ommit this for the orignal BERT implement
+
         if isinstance(config.hidden_act, str):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
@@ -413,16 +452,19 @@ class ViTMAEIntermediate(nn.Module):
 
 # Copied from transformers.models.vit.modeling_vit.ViTOutput ViT->ViTMAE
 class ViTMAEOutput(nn.Module):
-    def __init__(self, config: ViTMAEConfig) -> None:
+    def __init__(self, config: ViTMAEConfig, drop_path_rate: float) -> None:
         super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
+
+        self.layerscale = LayerScale(config=config)
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
 
-        hidden_states = hidden_states + input_tensor
+        hidden_states = self.drop_path(self.layerscale(hidden_states)) + input_tensor
 
         return hidden_states
 
@@ -430,18 +472,20 @@ class ViTMAEOutput(nn.Module):
 # Copied from transformers.models.vit.modeling_vit.ViTLayer with ViT->ViTMAE
 class ViTMAELayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
-
-    def __init__(self, config: ViTMAEConfig) -> None:
+    def __init__(self, config: ViTMAEConfig, drop_path_rate: float) -> None:
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = ViTMAEAttention(config)
 
         self.intermediate = ViTMAEIntermediate(config)
-        self.output = ViTMAEOutput(config)
+        self.output = ViTMAEOutput(config, drop_path_rate=drop_path_rate)
 
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
+        self.layerscale = LayerScale(config=config)
 
     def forward(
         self,
@@ -458,7 +502,7 @@ class ViTMAELayer(nn.Module):
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = attention_output + hidden_states
+        hidden_states = self.drop_path(self.layerscale(attention_output)) + hidden_states
 
         # in ViTMAE, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
@@ -477,7 +521,11 @@ class ViTMAEEncoder(nn.Module):
     def __init__(self, config: ViTMAEConfig) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([ViTMAELayer(config) for _ in range(config.num_hidden_layers)])
+        
+        depth = config.num_hidden_layers
+        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]  # stochastic depth decay rule
+        
+        self.layer = nn.ModuleList([ViTMAELayer(config, drop_path_rate=dpr[i]) for i in range(depth)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -538,11 +586,7 @@ class ViTMAEPreTrainedModel(PreTrainedModel):
     def _init_weights(self, module):
         """Initialize the weights"""
         if isinstance(module, (nn.Linear, nn.Conv2d)):
-            # Upcast the input in `fp32` and cast it back to desired `dtype` to avoid
-            # `trunc_normal_cpu` not implemented in `half` issues
-            module.weight.data = nn.init.trunc_normal_(
-                module.weight.data.to(torch.float32), mean=0.0, std=self.config.initializer_range
-            ).to(module.weight.dtype)
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.LayerNorm):
@@ -715,9 +759,11 @@ class ViTMAEDecoder(nn.Module):
         decoder_config.num_hidden_layers = config.decoder_num_hidden_layers
         decoder_config.num_attention_heads = config.decoder_num_attention_heads
         decoder_config.intermediate_size = config.decoder_intermediate_size
-        
+        depth = decoder_config.num_hidden_layers
+
+        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]  # stochastic depth decay rule
         self.decoder_layers = nn.ModuleList(
-            [ViTMAELayer(decoder_config) for _ in range(decoder_config.num_hidden_layers)]
+            [ViTMAELayer(decoder_config, drop_path_rate=dpr[i]) for i in range(depth)]
         )
 
         self.decoder_layernorm = nn.LayerNorm(decoder_config.hidden_size, eps=config.layer_norm_eps)

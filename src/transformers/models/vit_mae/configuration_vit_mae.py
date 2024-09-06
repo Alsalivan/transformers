@@ -100,6 +100,7 @@ class ViTMAEConfig(PretrainedConfig):
         hidden_act="gelu",
         hidden_dropout_prob=0.0,
         attention_probs_dropout_prob=0.0,
+        drop_path_rate=0.0,
         initializer_range=0.02,
         layer_norm_eps=1e-12,
         image_size=224,
@@ -112,6 +113,10 @@ class ViTMAEConfig(PretrainedConfig):
         decoder_intermediate_size=2048,
         mask_ratio=0.75,
         norm_pix_loss=False,
+        mask_loss=True,
+        use_cls_token=False,
+        use_learnable_pos_emb=True,
+        layerscale_init_values=1e-5,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -123,6 +128,8 @@ class ViTMAEConfig(PretrainedConfig):
         self.hidden_act = hidden_act
         self.hidden_dropout_prob = hidden_dropout_prob
         self.attention_probs_dropout_prob = attention_probs_dropout_prob
+        self.drop_path_rate = drop_path_rate
+
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.image_size = image_size
@@ -133,5 +140,10 @@ class ViTMAEConfig(PretrainedConfig):
         self.decoder_hidden_size = decoder_hidden_size
         self.decoder_num_hidden_layers = decoder_num_hidden_layers
         self.decoder_intermediate_size = decoder_intermediate_size
+
         self.mask_ratio = mask_ratio
         self.norm_pix_loss = norm_pix_loss
+        self.mask_loss = mask_loss
+        self.use_cls_token = use_cls_token
+        self.use_learnable_pos_emb = use_learnable_pos_emb
+        self.layerscale_init_values = layerscale_init_values
