@@ -107,6 +107,7 @@ class VideoMAEConfig(PretrainedConfig):
         hidden_act="gelu",
         hidden_dropout_prob=0.0,
         attention_probs_dropout_prob=0.0,
+        drop_path_rate=0.0,
         initializer_range=0.02,
         layer_norm_eps=1e-12,
         qkv_bias=True,
@@ -115,7 +116,12 @@ class VideoMAEConfig(PretrainedConfig):
         decoder_hidden_size=384,
         decoder_num_hidden_layers=4,
         decoder_intermediate_size=1536,
+        use_learnable_pos_emb=True,
         norm_pix_loss=True,
+        mask_ratio=0.75,
+        mask_loss=True,
+        use_cls_token=False,
+        attention_type='self_attention',
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -133,6 +139,7 @@ class VideoMAEConfig(PretrainedConfig):
         self.hidden_act = hidden_act
         self.hidden_dropout_prob = hidden_dropout_prob
         self.attention_probs_dropout_prob = attention_probs_dropout_prob
+        self.drop_path_rate = drop_path_rate
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.qkv_bias = qkv_bias
@@ -142,4 +149,9 @@ class VideoMAEConfig(PretrainedConfig):
         self.decoder_hidden_size = decoder_hidden_size
         self.decoder_num_hidden_layers = decoder_num_hidden_layers
         self.decoder_intermediate_size = decoder_intermediate_size
+        self.use_learnable_pos_emb = use_learnable_pos_emb
+        self.mask_ratio = mask_ratio
+        self.mask_loss = mask_loss
+        self.use_cls_token = use_cls_token
+        self.attention_type = attention_type
         self.norm_pix_loss = norm_pix_loss
