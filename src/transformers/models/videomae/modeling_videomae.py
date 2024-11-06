@@ -486,8 +486,8 @@ class VideoMAELayer(nn.Module):
         self.intermediate = VideoMAEIntermediate(config)
         self.output = VideoMAEOutput(config, drop_path_rate=drop_path_rate)
 
-        self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=torch.float32)
+        self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=torch.float32)
 
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
         self.layerscale = LayerScale(config=config)
@@ -649,7 +649,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         self.embeddings = VideoMAEEmbeddings(config)
         self.encoder = VideoMAEEncoder(config)
 
-        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps) if config.use_cls_token else None
+        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=torch.float32)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -675,6 +675,7 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        use_layernorm: bool = True,
     ) -> Union[Tuple, BaseModelOutput]:
         r"""
         bool_masked_pos (`torch.BoolTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -780,8 +781,8 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs[0]
-
-        if self.config.use_cls_token:
+        
+        if use_layernorm:
             sequence_output = self.layernorm(sequence_output)
 
         if not return_dict:
@@ -835,7 +836,7 @@ class VideoMAEDecoder(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, depth)]  # stochastic depth decay rule
         self.decoder_layers = nn.ModuleList([VideoMAELayer(decoder_config, drop_path_rate=dpr[i]) for i in range(depth)])
 
-        self.layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps)
+        self.layernorm = nn.LayerNorm(config.decoder_hidden_size, eps=config.layer_norm_eps, dtype=torch.float32)
         self.head = nn.Linear(config.decoder_hidden_size, patch_size*patch_size*tubelet_size, bias=True)
 
         self.gradient_checkpointing = False
@@ -1037,6 +1038,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        use_layernorm: bool = True,
     ) -> Union[tuple, VideoMAEForPreTrainingOutput]:
         r"""
         apply_masking (`bool`):
@@ -1077,6 +1079,7 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            use_layernorm=use_layernorm,
         )
 
         latent = outputs.last_hidden_state
