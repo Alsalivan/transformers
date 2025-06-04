@@ -31,6 +31,9 @@ else:
         "VideoMAEModel",
         "VideoMAEPreTrainedModel",
         "VideoMAEForVideoClassification",
+        "VideoMAEDecoder",
+        "VideoMAELayer",
+        "get_multi_sincos_pos_embed",
     ]
 
 try:
@@ -56,6 +59,9 @@ if TYPE_CHECKING:
             VideoMAEForVideoClassification,
             VideoMAEModel,
             VideoMAEPreTrainedModel,
+            VideoMAEDecoder,
+            VideoMAELayer, 
+            get_multi_sincos_pos_embed,
         )
 
     try:

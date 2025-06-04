@@ -529,7 +529,6 @@ class VideoMAELayer(nn.Module):
 
     def __init__(self, config: VideoMAEConfig, drop_path_rate: float) -> None:
         super().__init__()
-        self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = VideoMAEAttention(config)
         
