@@ -716,10 +716,12 @@ class VideoMAEModel(VideoMAEPreTrainedModel):
         use_layernorm: bool = True,
     ) -> Union[Tuple, BaseModelOutput]:
         r"""
-        bool_masked_pos (`torch.BoolTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Boolean masked positions. Indicates which patches are masked (1) and which aren't (0). Each video in the
-            batch must have the same number of masked patches. If `None`, then all patches are considered. Sequence
-            length is `(num_frames // tubelet_size) * (image_size // patch_size) ** 2`.
+        apply_masking (`bool`, *optional*, defaults to `True`):
+            Whether to apply random patch masking during input embedding. If `False`, assumes masking is already applied
+            externally or not required (e.g., during evaluation or ablations).
+
+        use_layernorm (`bool`, *optional*, defaults to `True`):
+            Whether to apply layer normalization to the encoder output before returning the final hidden states.
 
         Examples:
 
@@ -1076,12 +1078,13 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
         return_dict: Optional[bool] = None,
         use_layernorm: bool = True,
     ) -> Union[tuple, VideoMAEForPreTrainingOutput]:
-        r"""
-        apply_masking (`bool`):
-            Boolean masked positions. Indicates which patches are masked (1) and which aren't (0). Each video in the
-            batch must have the same number of masked patches. Sequence length is `(num_frames // tubelet_size) *
-            (image_size // patch_size) ** 2`.
-        
+        r"""            
+        apply_masking (`bool`, *optional*, defaults to `True`):
+            Whether to apply random patch masking during input embedding. If `False`, assumes masking is already applied
+            externally or not required (e.g., during evaluation or ablations).
+
+        use_layernorm (`bool`, *optional*, defaults to `True`):
+            Whether to apply layer normalization to the encoder output before returning the final hidden states.
 
         Examples:
         ```python
@@ -1139,3 +1142,5 @@ class VideoMAEForPreTraining(VideoMAEPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+__all__ = ["VideoMAEForPreTraining", "VideoMAEModel", "VideoMAEPreTrainedModel", "VideoMAELayer"]

@@ -236,7 +236,14 @@ class ViTMAEEmbeddings(nn.Module):
                 )
             
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+    
+    def initialize_weights(self):
+        if self.cls_token is not None:
+            nn.init.zeros_(self.cls_token)
 
+        if self.position_embeddings.requires_grad:
+            nn.init.zeros_(self.position_embeddings)
+        
     # Copied from transformers.models.vit.modeling_vit.ViTEmbeddings.interpolate_pos_encoding
     def interpolate_pos_encoding(self, embeddings: torch.Tensor, height: int, width: int) -> torch.Tensor:
         """
@@ -714,9 +721,9 @@ class ViTMAEPreTrainedModel(PreTrainedModel):
         elif isinstance(module, ViTMAEEmbeddings):
             module.initialize_weights()
         elif isinstance(module, ViTMAEDecoder):
-            module.mask_token.data.zero_()
-            module.decoder_pos_embed.data.zero_()
-
+            nn.init.zeros_(module.mask_token)
+            if module.decoder_position_embeddings.requires_grad:
+                nn.init.zeros_(module.decoder_position_embeddings)
 
 @auto_docstring
 class ViTMAEModel(ViTMAEPreTrainedModel):
@@ -756,11 +763,15 @@ class ViTMAEModel(ViTMAEPreTrainedModel):
         use_layernorm: bool = True,
     ) -> Union[Tuple, ViTMAEModelOutput]:
         r"""
-        interpolate_pos_encoding (`bool`, *optional*, default `False`):
-            Whether to interpolate the pre-trained position encodings. This is mainly used to use the model on higher
-            resolution images.
         noise (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Mainly used for testing purposes to control randomness and maintain the reproducibility
+            
+        apply_masking (`bool`, *optional*, defaults to `True`):
+            Whether to apply random patch masking during input embedding. If `False`, assumes masking is already applied
+            externally or not required (e.g., during evaluation or ablations).
+
+        use_layernorm (`bool`, *optional*, defaults to `True`):
+            Whether to apply layer normalization to the encoder output before returning the final hidden states.
 
         Examples:
 
@@ -1022,7 +1033,7 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         class PreTrainedModel
         """
         for layer, heads in heads_to_prune.items():
-            self.encoder.layer[layer].attention.prune_heads(heads)
+            self.vit.layer[layer].attention.prune_heads(heads)
 
     def patchify(self, pixel_values):
         """
@@ -1062,13 +1073,11 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         )
         return patchified_pixel_values
 
-    def unpatchify(self, patchified_pixel_values, original_image_size: Optional[Tuple[int, int]] = None):
+    def unpatchify(self, patchified_pixel_values):
         """
         Args:
             patchified_pixel_values (`torch.FloatTensor` of shape `(batch_size, num_patches, patch_size[0] * patch_size[1] * num_channels)`:
                 Patchified pixel values.
-            original_image_size (`Tuple[int, int]`, *optional*):
-                Original image size.
 
         Returns:
             `torch.FloatTensor` of shape `(batch_size, num_channels, height, width)`:
@@ -1105,8 +1114,6 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
                 Predicted pixel values.
             mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`):
                 Tensor indicating which patches are masked (1) and which are not (0).
-            interpolate_pos_encoding (`bool`, *optional*, default `False`):
-                interpolation flag passed during the forward pass.
 
         Returns:
             `torch.FloatTensor`: Pixel reconstruction loss
@@ -1137,11 +1144,15 @@ class ViTMAEForPreTraining(ViTMAEPreTrainedModel):
         use_layernorm: bool = True,
     ) -> Union[Tuple, ViTMAEForPreTrainingOutput]:
         r"""
-        interpolate_pos_encoding (`bool`, *optional*, default `False`):
-            Whether to interpolate the pre-trained position encodings. This is mainly used to use the model on higher
-            resolution images.
         noise (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Mainly used for testing purposes to control randomness and maintain the reproducibility
+            
+        apply_masking (`bool`, *optional*, defaults to `True`):
+            Whether to apply random patch masking during input embedding. If `False`, assumes masking is already applied
+            externally or not required (e.g., during evaluation or ablations).
+
+        use_layernorm (`bool`, *optional*, defaults to `True`):
+            Whether to apply layer normalization to the encoder output before returning the final hidden states.
 
         Examples:
 
