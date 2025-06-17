@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TensorFlow SwiftFormer model."""
-
+"""TensorFlow SwiftFormer model."""
 
 import collections.abc
 from typing import Optional, Tuple, Union
@@ -862,3 +861,6 @@ class TFSwiftFormerForImageClassification(TFSwiftFormerPreTrainedModel):
             with tf.name_scope(self.dist_head.name):
                 self.dist_head.build(self.config.embed_dims[-1])
         self.built = True
+
+
+__all__ = ["TFSwiftFormerForImageClassification", "TFSwiftFormerModel", "TFSwiftFormerPreTrainedModel"]

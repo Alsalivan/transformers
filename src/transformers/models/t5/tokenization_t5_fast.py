@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization class for model T5."""
-
+"""Tokenization class for model T5."""
 
 import os
 import re
@@ -118,22 +117,19 @@ class T5TokenizerFast(PreTrainedTokenizerFast):
             kwargs["from_slow"] = True
 
         super().__init__(
-            vocab_file,
+            vocab_file=vocab_file,
             tokenizer_file=tokenizer_file,
             eos_token=eos_token,
             unk_token=unk_token,
             pad_token=pad_token,
             extra_ids=extra_ids,
             additional_special_tokens=additional_special_tokens,
+            add_prefix_space=add_prefix_space,
             **kwargs,
         )
 
         self.vocab_file = vocab_file
         self._extra_ids = extra_ids
-
-    @property
-    def can_save_slow_tokenizer(self) -> bool:
-        return os.path.isfile(self.vocab_file) if self.vocab_file else False
 
     @staticmethod
     def _eventually_correct_t5_max_length(pretrained_model_name_or_path, max_model_length, init_max_model_length):
@@ -232,3 +228,6 @@ class T5TokenizerFast(PreTrainedTokenizerFast):
 
     def get_sentinel_token_ids(self):
         return [self.convert_tokens_to_ids(token) for token in self.get_sentinel_tokens()]
+
+
+__all__ = ["T5TokenizerFast"]

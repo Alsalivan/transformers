@@ -14,9 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
- Tokenization classes for Transformer XL model. Adapted from https://github.com/kimiyoung/transformer-xl.
+Tokenization classes for Transformer XL model. Adapted from https://github.com/kimiyoung/transformer-xl.
 """
-
 
 import glob
 import os
@@ -30,6 +29,7 @@ import numpy as np
 from ....tokenization_utils import PreTrainedTokenizer
 from ....utils import (
     cached_file,
+    check_torch_load_is_safe,
     is_sacremoses_available,
     is_torch_available,
     logging,
@@ -163,7 +163,7 @@ class TransfoXLTokenizer(PreTrainedTokenizer):
         lower_case=False,
         delimiter=None,
         vocab_file=None,
-        pretrained_vocab_file: str = None,
+        pretrained_vocab_file: Optional[str] = None,
         never_split=None,
         unk_token="<unk>",
         eos_token="<eos>",
@@ -223,7 +223,8 @@ class TransfoXLTokenizer(PreTrainedTokenizer):
                             "from a PyTorch pretrained vocabulary, "
                             "or activate it with environment variables USE_TORCH=1 and USE_TF=0."
                         )
-                    vocab_dict = torch.load(pretrained_vocab_file)
+                    check_torch_load_is_safe()
+                    vocab_dict = torch.load(pretrained_vocab_file, weights_only=True)
 
             if vocab_dict is not None:
                 for key, value in vocab_dict.items():
@@ -512,7 +513,7 @@ class TransfoXLTokenizer(PreTrainedTokenizer):
             return symbols
 
 
-class LMOrderedIterator(object):
+class LMOrderedIterator:
     def __init__(self, data, bsz, bptt, device="cpu", ext_len=None):
         """
         data -- LongTensor -- the LongTensor is strictly ordered
@@ -571,7 +572,7 @@ class LMOrderedIterator(object):
         return self.get_fixlen_iter()
 
 
-class LMShuffledIterator(object):
+class LMShuffledIterator:
     def __init__(self, data, bsz, bptt, device="cpu", ext_len=None, shuffle=False):
         """
         data -- list[LongTensor] -- there is no order among the LongTensors
@@ -680,7 +681,7 @@ class LMMultiFileIterator(LMShuffledIterator):
                 yield batch
 
 
-class TransfoXLCorpus(object):
+class TransfoXLCorpus:
     @classmethod
     @torch_only_method
     def from_pretrained(cls, pretrained_model_name_or_path, cache_dir=None, *inputs, **kwargs):
@@ -692,7 +693,7 @@ class TransfoXLCorpus(object):
         # redirect to the cache, if necessary
         try:
             resolved_corpus_file = cached_file(pretrained_model_name_or_path, CORPUS_NAME, cache_dir=cache_dir)
-        except EnvironmentError:
+        except OSError:
             logger.error(
                 f"Corpus '{pretrained_model_name_or_path}' was not found in corpus list"
                 f" ({', '.join(PRETRAINED_CORPUS_ARCHIVE_MAP.keys())}. We assumed '{pretrained_model_name_or_path}'"
@@ -706,7 +707,8 @@ class TransfoXLCorpus(object):
 
         # Instantiate tokenizer.
         corpus = cls(*inputs, **kwargs)
-        corpus_dict = torch.load(resolved_corpus_file)
+        check_torch_load_is_safe()
+        corpus_dict = torch.load(resolved_corpus_file, weights_only=True)
         for key, value in corpus_dict.items():
             corpus.__dict__[key] = value
         corpus.vocab = vocab
@@ -785,7 +787,8 @@ def get_lm_corpus(datadir, dataset):
     fn_pickle = os.path.join(datadir, "cache.pkl")
     if os.path.exists(fn):
         logger.info("Loading cached dataset...")
-        corpus = torch.load(fn_pickle)
+        check_torch_load_is_safe()
+        corpus = torch.load(fn_pickle, weights_only=True)
     elif os.path.exists(fn):
         logger.info("Loading cached dataset from pickle...")
         if not strtobool(os.environ.get("TRUST_REMOTE_CODE", "False")):
@@ -817,3 +820,6 @@ def get_lm_corpus(datadir, dataset):
         torch.save(corpus, fn)
 
     return corpus
+
+
+__all__ = ["TransfoXLCorpus", "TransfoXLTokenizer"]

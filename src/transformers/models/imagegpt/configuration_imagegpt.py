@@ -12,10 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" OpenAI ImageGPT configuration"""
+"""OpenAI ImageGPT configuration"""
 
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Optional
 
 from ...configuration_utils import PretrainedConfig
 from ...onnx import OnnxConfig
@@ -194,3 +195,6 @@ class ImageGPTOnnxConfig(OnnxConfig):
         inputs = dict(preprocessor(images=input_image, return_tensors=framework))
 
         return inputs
+
+
+__all__ = ["ImageGPTConfig", "ImageGPTOnnxConfig"]

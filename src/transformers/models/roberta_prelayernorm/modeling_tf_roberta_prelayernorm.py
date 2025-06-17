@@ -13,8 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TF 2.0 RoBERTa-PreLayerNorm model."""
-
+"""TF 2.0 RoBERTa-PreLayerNorm model."""
 
 from __future__ import annotations
 
@@ -1794,3 +1793,16 @@ class TFRobertaPreLayerNormForQuestionAnswering(TFRobertaPreLayerNormPreTrainedM
         if getattr(self, "qa_outputs", None) is not None:
             with tf.name_scope(self.qa_outputs.name):
                 self.qa_outputs.build([None, None, self.config.hidden_size])
+
+
+__all__ = [
+    "TFRobertaPreLayerNormForCausalLM",
+    "TFRobertaPreLayerNormForMaskedLM",
+    "TFRobertaPreLayerNormForMultipleChoice",
+    "TFRobertaPreLayerNormForQuestionAnswering",
+    "TFRobertaPreLayerNormForSequenceClassification",
+    "TFRobertaPreLayerNormForTokenClassification",
+    "TFRobertaPreLayerNormMainLayer",
+    "TFRobertaPreLayerNormModel",
+    "TFRobertaPreLayerNormPreTrainedModel",
+]

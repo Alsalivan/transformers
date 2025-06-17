@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" ViViT model configuration"""
+"""ViViT model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -114,3 +114,6 @@ class VivitConfig(PretrainedConfig):
         self.qkv_bias = qkv_bias
 
         super().__init__(**kwargs)
+
+
+__all__ = ["VivitConfig"]

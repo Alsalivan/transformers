@@ -18,7 +18,7 @@ rendered properly in your Markdown viewer.
 
 ## Overview
 
-DETR モデルは、[Transformers を使用したエンドツーエンドのオブジェクト検出](https://arxiv.org/abs/2005.12872) で提案されました。
+DETR モデルは、[Transformers を使用したエンドツーエンドのオブジェクト検出](https://huggingface.co/papers/2005.12872) で提案されました。
 Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas Usunier, Alexander Kirillov and Sergey Zagoruyko ルイコ。 DETR
 畳み込みバックボーンと、その後にエンドツーエンドでトレーニングできるエンコーダー/デコーダー Transformer で構成されます。
 物体の検出。 Faster-R-CNN や Mask-R-CNN などのモデルの複雑さの多くが大幅に簡素化されます。
@@ -178,6 +178,15 @@ DETR の使用を開始するのに役立つ公式 Hugging Face およびコミ�
 ## DetrImageProcessor
 
 [[autodoc]] DetrImageProcessor
+    - preprocess
+    - post_process_object_detection
+    - post_process_semantic_segmentation
+    - post_process_instance_segmentation
+    - post_process_panoptic_segmentation
+
+## DetrImageProcessorFast
+
+[[autodoc]] DetrImageProcessorFast
     - preprocess
     - post_process_object_detection
     - post_process_semantic_segmentation

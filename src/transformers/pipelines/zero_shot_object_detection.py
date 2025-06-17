@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union, overload
 
 from ..utils import add_end_docstrings, is_torch_available, is_vision_available, logging, requires_backends
 from .base import ChunkPipeline, build_pipeline_init_args
@@ -7,7 +7,7 @@ from .base import ChunkPipeline, build_pipeline_init_args
 if is_vision_available():
     from PIL import Image
 
-    from ..image_utils import load_image
+    from ..image_utils import load_image, valid_images
 
 if is_torch_available():
     import torch
@@ -62,12 +62,20 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
         requires_backends(self, "vision")
         self.check_model_type(MODEL_FOR_ZERO_SHOT_OBJECT_DETECTION_MAPPING_NAMES)
 
+    @overload
+    def __call__(
+        self, image: Union[str, "Image.Image"], candidate_labels: Union[str, List[str]], **kwargs: Any
+    ) -> List[Dict[str, Any]]: ...
+
+    @overload
+    def __call__(self, image: List[Dict[str, Any]], **kwargs: Any) -> List[List[Dict[str, Any]]]: ...
+
     def __call__(
         self,
         image: Union[str, "Image.Image", List[Dict[str, Any]]],
-        candidate_labels: Union[str, List[str]] = None,
-        **kwargs,
-    ):
+        candidate_labels: Optional[Union[str, List[str]]] = None,
+        **kwargs: Any,
+    ) -> Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]]:
         """
         Detect objects (bounding boxes & classes) in the image(s) passed as inputs.
 
@@ -130,8 +138,23 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
 
         if isinstance(image, (str, Image.Image)):
             inputs = {"image": image, "candidate_labels": candidate_labels}
+        elif isinstance(image, (list, tuple)) and valid_images(image):
+            return list(
+                super().__call__(
+                    ({"image": img, "candidate_labels": labels} for img, labels in zip(image, candidate_labels)),
+                    **kwargs,
+                )
+            )
         else:
+            """
+            Supports the following format
+            - {"image": image, "candidate_labels": candidate_labels}
+            - [{"image": image, "candidate_labels": candidate_labels}]
+            - Generator and datasets
+            This is a common pattern in other multimodal pipelines, so we support it here as well.
+            """
             inputs = image
+
         results = super().__call__(inputs, **kwargs)
         return results
 
@@ -156,6 +179,8 @@ class ZeroShotObjectDetectionPipeline(ChunkPipeline):
         for i, candidate_label in enumerate(candidate_labels):
             text_inputs = self.tokenizer(candidate_label, return_tensors=self.framework)
             image_features = self.image_processor(image, return_tensors=self.framework)
+            if self.framework == "pt":
+                image_features = image_features.to(self.torch_dtype)
             yield {
                 "is_last": i == len(candidate_labels) - 1,
                 "target_size": target_size,

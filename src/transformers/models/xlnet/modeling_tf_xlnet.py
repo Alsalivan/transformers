@@ -14,9 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
- TF 2.0 XLNet model.
+TF 2.0 XLNet model.
 """
-
 
 from __future__ import annotations
 
@@ -864,7 +863,7 @@ class TFXLNetModelOutput(ModelOutput):
             heads.
     """
 
-    last_hidden_state: tf.Tensor = None
+    last_hidden_state: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -901,7 +900,7 @@ class TFXLNetLMHeadModelOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -935,7 +934,7 @@ class TFXLNetForSequenceClassificationOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -969,7 +968,7 @@ class TFXLNetForTokenClassificationOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -1005,7 +1004,7 @@ class TFXLNetForMultipleChoiceOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -1041,8 +1040,8 @@ class TFXLNetForQuestionAnsweringSimpleOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    start_logits: tf.Tensor = None
-    end_logits: tf.Tensor = None
+    start_logits: Optional[tf.Tensor] = None
+    end_logits: Optional[tf.Tensor] = None
     mems: List[tf.Tensor] | None = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
@@ -1808,3 +1807,15 @@ class TFXLNetForQuestionAnsweringSimple(TFXLNetPreTrainedModel, TFQuestionAnswer
         if getattr(self, "qa_outputs", None) is not None:
             with tf.name_scope(self.qa_outputs.name):
                 self.qa_outputs.build([None, None, self.config.hidden_size])
+
+
+__all__ = [
+    "TFXLNetForMultipleChoice",
+    "TFXLNetForQuestionAnsweringSimple",
+    "TFXLNetForSequenceClassification",
+    "TFXLNetForTokenClassification",
+    "TFXLNetLMHeadModel",
+    "TFXLNetMainLayer",
+    "TFXLNetModel",
+    "TFXLNetPreTrainedModel",
+]

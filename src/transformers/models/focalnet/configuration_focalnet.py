@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" FocalNet model configuration"""
+"""FocalNet model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -159,3 +159,6 @@ class FocalNetConfig(BackboneConfigMixin, PretrainedConfig):
         self._out_features, self._out_indices = get_aligned_output_features_output_indices(
             out_features=out_features, out_indices=out_indices, stage_names=self.stage_names
         )
+
+
+__all__ = ["FocalNetConfig"]

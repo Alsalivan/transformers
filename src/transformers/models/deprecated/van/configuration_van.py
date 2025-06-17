@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" VAN model configuration"""
+"""VAN model configuration"""
 
 from ....configuration_utils import PretrainedConfig
 from ....utils import logging
@@ -105,3 +105,6 @@ class VanConfig(PretrainedConfig):
         self.layer_scale_init_value = layer_scale_init_value
         self.drop_path_rate = drop_path_rate
         self.dropout_rate = dropout_rate
+
+
+__all__ = ["VanConfig"]

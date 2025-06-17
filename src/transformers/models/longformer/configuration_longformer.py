@@ -12,9 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Longformer configuration"""
+"""Longformer configuration"""
+
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from ...configuration_utils import PretrainedConfig
 from ...onnx import OnnxConfig
@@ -138,7 +140,9 @@ class LongformerConfig(PretrainedConfig):
 
 
 class LongformerOnnxConfig(OnnxConfig):
-    def __init__(self, config: "PretrainedConfig", task: str = "default", patching_specs: "List[PatchingSpec]" = None):
+    def __init__(
+        self, config: "PretrainedConfig", task: str = "default", patching_specs: "Optional[List[PatchingSpec]]" = None
+    ):
         super().__init__(config, task, patching_specs)
         config.onnx_export = True
 
@@ -198,3 +202,6 @@ class LongformerOnnxConfig(OnnxConfig):
         inputs["global_attention_mask"][:, ::2] = 1
 
         return inputs
+
+
+__all__ = ["LongformerConfig", "LongformerOnnxConfig"]

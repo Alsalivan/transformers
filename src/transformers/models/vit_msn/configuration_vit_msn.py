@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" ViT MSN model configuration"""
-
+"""ViT MSN model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -111,3 +110,6 @@ class ViTMSNConfig(PretrainedConfig):
         self.patch_size = patch_size
         self.num_channels = num_channels
         self.qkv_bias = qkv_bias
+
+
+__all__ = ["ViTMSNConfig"]

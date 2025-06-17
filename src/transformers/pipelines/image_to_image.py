@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import List, Union
+from typing import Any, List, Union, overload
 
 import numpy as np
 
@@ -84,8 +84,14 @@ class ImageToImagePipeline(Pipeline):
 
         return preprocess_params, forward_params, postprocess_params
 
+    @overload
+    def __call__(self, images: Union[str, "Image.Image"], **kwargs: Any) -> "Image.Image": ...
+
+    @overload
+    def __call__(self, images: Union[List[str], List["Image.Image"]], **kwargs: Any) -> List["Image.Image"]: ...
+
     def __call__(
-        self, images: Union[str, List[str], "Image.Image", List["Image.Image"]], **kwargs
+        self, images: Union[str, List[str], "Image.Image", List["Image.Image"]], **kwargs: Any
     ) -> Union["Image.Image", List["Image.Image"]]:
         """
         Transform the image(s) passed as inputs.
@@ -119,6 +125,8 @@ class ImageToImagePipeline(Pipeline):
     def preprocess(self, image, timeout=None):
         image = load_image(image, timeout=timeout)
         inputs = self.image_processor(images=[image], return_tensors="pt")
+        if self.framework == "pt":
+            inputs = inputs.to(self.torch_dtype)
         return inputs
 
     def postprocess(self, model_outputs):

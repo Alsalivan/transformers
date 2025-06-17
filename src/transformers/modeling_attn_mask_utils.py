@@ -11,10 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+IMPORTANT NOTICE: Every class and function in this file is deprecated in favor of using the much more general
+`masking_utils.py` primitives. New code should not rely on it, it is only kept for backward compatibility for now,
+and will be removed in the future.
+"""
+
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import torch
+
+from .utils.import_utils import is_torchdynamo_compiling
 
 
 @dataclass
@@ -167,6 +175,10 @@ class AttentionMaskConverter:
             diagonal = past_key_values_length - sliding_window - 1
 
             context_mask = torch.tril(torch.ones_like(mask, dtype=torch.bool), diagonal=diagonal)
+            # Recent changes in PyTorch prevent mutations on tensors converted with aten::_to_copy
+            # See https://github.com/pytorch/pytorch/issues/127571
+            if is_torchdynamo_compiling():
+                mask = mask.clone()
             mask.masked_fill_(context_mask, torch.finfo(dtype).min)
 
         return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
@@ -181,7 +193,7 @@ class AttentionMaskConverter:
 
         expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
 
-        inverted_mask = 1.0 - expanded_mask
+        inverted_mask = torch.tensor(1.0, dtype=dtype) - expanded_mask
 
         return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
@@ -243,30 +255,33 @@ class AttentionMaskConverter:
         is_training: bool = False,
     ) -> bool:
         """
-        Detects whether the optional user-specified attention_mask & the automatically created causal mask can be ignored in case PyTorch's SDPA is used, rather relying on SDPA's `is_causal` argument.
+        Detects whether the optional user-specified attention_mask & the automatically created causal mask can be
+        ignored in case PyTorch's SDPA is used, rather relying on SDPA's `is_causal` argument.
 
         In case no token is masked in the `attention_mask` argument, if `query_length == 1` or
         `key_value_length == query_length`, we rather rely on SDPA `is_causal` argument to use causal/non-causal masks,
-        allowing to dispatch to the flash attention kernel (that can otherwise not be used if a custom `attn_mask` is passed).
+        allowing to dispatch to the flash attention kernel (that can otherwise not be used if a custom `attn_mask` is
+        passed).
         """
 
-        batch_size, query_length = inputs_embeds.shape[0], inputs_embeds.shape[1]
+        _, query_length = inputs_embeds.shape[0], inputs_embeds.shape[1]
         key_value_length = query_length + past_key_values_length
 
-        is_tracing = (
-            torch.jit.is_tracing()
-            or isinstance(inputs_embeds, torch.fx.Proxy)
-            or (hasattr(torch, "_dynamo") and torch._dynamo.is_compiling())
-        )
+        is_tracing = torch.jit.is_tracing() or isinstance(inputs_embeds, torch.fx.Proxy) or is_torchdynamo_compiling()
 
         ignore_causal_mask = False
 
         if attention_mask is None:
-            # TODO: When tracing with TorchDynamo with fullgraph=True, the model is recompiled depending on the input shape, thus SDPA's `is_causal` argument is rightfully updated (see https://gist.github.com/fxmarty/1313f39037fc1c112508989628c57363). However, when using `torch.export` or
-            # or `torch.onnx.dynamo_export`, we must pass an example input, and `is_causal` behavior is hard-coded. If a user exports a model with q_len > 1, the exported model will hard-code `is_causal=True` which is in general wrong (see https://github.com/pytorch/pytorch/issues/108108).
+            # TODO: When tracing with TorchDynamo with fullgraph=True, the model is recompiled depending on the input
+            # shape, thus SDPA's `is_causal` argument is rightfully updated
+            # (see https://gist.github.com/fxmarty/1313f39037fc1c112508989628c57363). However, when using
+            # `torch.export` or `torch.onnx.dynamo_export`, we must pass an example input, and `is_causal` behavior is
+            # hard-coded. If a user exports a model with q_len > 1, the exported model will hard-code `is_causal=True`
+            # which is in general wrong (see https://github.com/pytorch/pytorch/issues/108108).
             # Thus, we only set `ignore_causal_mask = True` if the model is set to training.
             #
-            # Besides, jit.trace can not handle the `q_len > 1` condition for `is_causal` (`TypeError: scaled_dot_product_attention(): argument 'is_causal' must be bool, not Tensor`).
+            # Besides, jit.trace can not handle the `q_len > 1` condition for `is_causal`
+            # ("TypeError: scaled_dot_product_attention(): argument 'is_causal' must be bool, not Tensor").
             if (
                 (is_training or not is_tracing)
                 and (query_length == 1 or key_value_length == query_length)
@@ -275,18 +290,15 @@ class AttentionMaskConverter:
                 ignore_causal_mask = True
         elif sliding_window is None or key_value_length < sliding_window:
             if len(attention_mask.shape) == 4:
-                expected_shape = (batch_size, 1, query_length, key_value_length)
-                if tuple(attention_mask.shape) != expected_shape:
-                    raise ValueError(
-                        f"Incorrect 4D attention_mask shape: {tuple(attention_mask.shape)}; expected: {expected_shape}."
-                    )
-            elif (is_training or not is_tracing) and torch.all(attention_mask == 1):
+                return False
+            elif not is_tracing and torch.all(attention_mask == 1):
                 if query_length == 1 or key_value_length == query_length:
                     # For query_length == 1, causal attention and bi-directional attention are the same.
                     ignore_causal_mask = True
 
-                # Unfortunately, for query_length > 1 and key_value_length != query_length, we cannot generally ignore the attention mask, as SDPA causal mask generation
-                # may be wrong. We will set `is_causal=False` in SDPA and rely on Transformers attention_mask instead, hence not setting it to None here.
+                # Unfortunately, for query_length > 1 and key_value_length != query_length, we cannot generally ignore
+                # the attention mask, as SDPA causal mask generation may be wrong. We will set `is_causal=False` in
+                # SDPA and rely on Transformers attention_mask instead, hence not setting it to None here.
                 # Reference: https://github.com/pytorch/pytorch/issues/108108
                 # TODO: maybe revisit this with https://github.com/pytorch/pytorch/pull/114823 in PyTorch 2.3.
 
@@ -295,7 +307,7 @@ class AttentionMaskConverter:
 
 def _prepare_4d_causal_attention_mask(
     attention_mask: Optional[torch.Tensor],
-    input_shape: Union[torch.Size, Tuple, List],
+    input_shape: Union[torch.Size, tuple, list],
     inputs_embeds: torch.Tensor,
     past_key_values_length: int,
     sliding_window: Optional[int] = None,
@@ -348,7 +360,7 @@ def _prepare_4d_causal_attention_mask(
 # Adapted from _prepare_4d_causal_attention_mask
 def _prepare_4d_causal_attention_mask_for_sdpa(
     attention_mask: Optional[torch.Tensor],
-    input_shape: Union[torch.Size, Tuple, List],
+    input_shape: Union[torch.Size, tuple, list],
     inputs_embeds: torch.Tensor,
     past_key_values_length: int,
     sliding_window: Optional[int] = None,
@@ -367,11 +379,7 @@ def _prepare_4d_causal_attention_mask_for_sdpa(
     # torch.jit.trace, symbolic_trace and torchdynamo with fullgraph=True are unable to capture the controlflow `is_causal=attention_mask is None and q_len > 1`
     # used as an SDPA argument. We keep compatibility with these tracing tools by always using SDPA's `attn_mask` argument in case we are tracing.
     # TODO: For dynamo, rather use a check on fullgraph=True once this is possible (https://github.com/pytorch/pytorch/pull/120400).
-    is_tracing = (
-        torch.jit.is_tracing()
-        or isinstance(inputs_embeds, torch.fx.Proxy)
-        or (hasattr(torch, "_dynamo") and torch._dynamo.is_compiling())
-    )
+    is_tracing = torch.jit.is_tracing() or isinstance(inputs_embeds, torch.fx.Proxy) or is_torchdynamo_compiling()
 
     ignore_causal_mask = AttentionMaskConverter._ignore_causal_mask_sdpa(
         attention_mask=attention_mask,
@@ -387,12 +395,15 @@ def _prepare_4d_causal_attention_mask_for_sdpa(
             input_shape[0], input_shape[-1], key_value_length, dtype=inputs_embeds.dtype, device=inputs_embeds.device
         )
     else:
-        expanded_4d_mask = attn_mask_converter.to_4d(
-            attention_mask,
-            input_shape[-1],
-            dtype=inputs_embeds.dtype,
-            key_value_length=key_value_length,
-        )
+        if attention_mask.dim() == 4:
+            expanded_4d_mask = attention_mask
+        else:
+            expanded_4d_mask = attn_mask_converter.to_4d(
+                attention_mask,
+                input_shape[-1],
+                dtype=inputs_embeds.dtype,
+                key_value_length=key_value_length,
+            )
 
         # Attend to all tokens in masked rows from the causal_mask, for example the relevant first rows when
         # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
@@ -411,7 +422,7 @@ def _prepare_4d_attention_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: 
     `(batch_size, key_value_length)`
 
     Args:
-        mask (`torch.Tensor` or `None`):
+        mask (`torch.Tensor`):
             A 2D attention mask of shape `(batch_size, key_value_length)`
         dtype (`torch.dtype`):
             The torch dtype the created mask shall have.
@@ -427,42 +438,27 @@ def _prepare_4d_attention_mask_for_sdpa(mask: torch.Tensor, dtype: torch.dtype, 
     `(batch_size, key_value_length)`
 
     Args:
-        mask (`torch.Tensor` or `None`):
+        mask (`torch.Tensor`):
             A 2D attention mask of shape `(batch_size, key_value_length)`
         dtype (`torch.dtype`):
             The torch dtype the created mask shall have.
         tgt_len (`int`):
             The target length or query length the created mask shall have.
     """
-    batch_size, key_value_length = mask.shape
+    _, key_value_length = mask.shape
     tgt_len = tgt_len if tgt_len is not None else key_value_length
 
-    # torch.jit.trace, symbolic_trace and torchdynamo with fullgraph=True are unable to capture the controlflow `is_causal=attention_mask is None and q_len > 1`
-    # used as an SDPA argument. We keep compatibility with these tracing tools by always using SDPA's `attn_mask` argument in case we are tracing.
-    # TODO: For dynamo, rather use a check on fullgraph=True once this is possible (https://github.com/pytorch/pytorch/pull/120400).
-    is_tracing = (
-        torch.jit.is_tracing()
-        or isinstance(mask, torch.fx.Proxy)
-        or (hasattr(torch, "_dynamo") and torch._dynamo.is_compiling())
-    )
+    is_tracing = torch.jit.is_tracing() or isinstance(mask, torch.fx.Proxy) or is_torchdynamo_compiling()
 
+    # torch.jit.trace, symbolic_trace and torchdynamo with fullgraph=True are unable to capture data-dependent controlflows.
     if not is_tracing and torch.all(mask == 1):
-        if tgt_len == 1:
-            # For query_length == 1, causal attention and bi-directional attention are the same.
-            return None
-        elif key_value_length == tgt_len:
-            return None
-        else:
-            # Unfortunately, for query_length > 1 and key_value_length != query_length, we can not generally ignore the attention mask, as SDPA causal mask generation
-            # may be wrong. We will set is_causal=False in SDPA and rely on Transformers attention_mask instead, hence not setting it to None here.
-            # Reference: https://github.com/pytorch/pytorch/issues/108108
-            return AttentionMaskConverter._expand_mask(mask=mask, dtype=dtype, tgt_len=tgt_len)
+        return None
     else:
         return AttentionMaskConverter._expand_mask(mask=mask, dtype=dtype, tgt_len=tgt_len)
 
 
 def _create_4d_causal_attention_mask(
-    input_shape: Union[torch.Size, Tuple, List],
+    input_shape: Union[torch.Size, tuple, list],
     dtype: torch.dtype,
     device: torch.device,
     past_key_values_length: int = 0,

@@ -13,8 +13,9 @@
 # limitations under the License.
 import logging
 import math
+from collections.abc import Iterable, Sequence
 from functools import partial
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 
@@ -32,7 +33,7 @@ def _fetch_dims(tree: Union[dict, list, tuple, torch.Tensor]) -> List[Tuple[int,
     elif isinstance(tree, torch.Tensor):
         shapes.append(tree.shape)
     else:
-        raise ValueError("Not supported")
+        raise TypeError("Not supported")
 
     return shapes
 
@@ -302,7 +303,7 @@ def chunk_layer(
             else:
                 out[i : i + chunk_size] = output_chunk
         else:
-            raise ValueError("Not supported")
+            raise TypeError("Not supported")
 
         i += chunk_size
 
@@ -356,7 +357,7 @@ class ChunkSizeTuner:
     def _compare_arg_caches(self, ac1: Iterable, ac2: Iterable) -> bool:
         consistent = True
         for a1, a2 in zip(ac1, ac2):
-            assert type(ac1) == type(ac2)
+            assert type(ac1) is type(ac2)
             if isinstance(ac1, (list, tuple)):
                 consistent &= self._compare_arg_caches(a1, a2)
             elif isinstance(ac1, dict):

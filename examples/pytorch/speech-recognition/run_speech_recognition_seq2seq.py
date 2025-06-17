@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# coding=utf-8
 # Copyright 2021 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +21,8 @@ Fine-tuning the library models for sequence to sequence speech recognition.
 import logging
 import os
 import sys
-import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 import datasets
 import evaluate
@@ -49,7 +47,7 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.41.0.dev0")
+check_min_version("4.53.0.dev0")
 
 require_version("datasets>=1.18.0", "To fix: pip install -r examples/pytorch/speech-recognition/requirements.txt")
 
@@ -95,19 +93,13 @@ class ModelArguments:
             )
         },
     )
-    use_auth_token: bool = field(
-        default=None,
-        metadata={
-            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead."
-        },
-    )
     trust_remote_code: bool = field(
         default=False,
         metadata={
             "help": (
-                "Whether or not to allow for custom models defined on the Hub in their own modeling files. This option "
-                "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
-                "execute code present on the Hub on your local machine."
+                "Whether to trust the execution of code from datasets/models defined on the Hub."
+                " This option should only be set to `True` for repositories you trust and in which you have read the"
+                " code, as it will execute code present on the Hub on your local machine."
             )
         },
     )
@@ -117,11 +109,11 @@ class ModelArguments:
     freeze_encoder: bool = field(
         default=False, metadata={"help": "Whether to freeze the entire encoder of the seq2seq model."}
     )
-    forced_decoder_ids: List[List[int]] = field(
+    forced_decoder_ids: list[list[int]] = field(
         default=None,
         metadata={"help": "Deprecated. Please use the `language` and `task` arguments instead."},
     )
-    suppress_tokens: List[int] = field(
+    suppress_tokens: list[int] = field(
         default=None,
         metadata={
             "help": (
@@ -254,7 +246,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
     decoder_start_token_id: int
     forward_attention_mask: bool
 
-    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+    def __call__(self, features: list[dict[str, Union[list[int], torch.Tensor]]]) -> dict[str, torch.Tensor]:
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
         model_input_name = self.processor.model_input_names[0]
@@ -294,15 +286,6 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    if model_args.use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead.",
-            FutureWarning,
-        )
-        if model_args.token is not None:
-            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
-        model_args.token = model_args.use_auth_token
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -363,6 +346,7 @@ def main():
             split=data_args.train_split_name,
             cache_dir=model_args.cache_dir,
             token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
         )
 
     if training_args.do_eval:
@@ -372,6 +356,7 @@ def main():
             split=data_args.eval_split_name,
             cache_dir=model_args.cache_dir,
             token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
         )
 
     if data_args.audio_column_name not in next(iter(raw_datasets.values())).column_names:
@@ -441,12 +426,8 @@ def main():
     if hasattr(model.generation_config, "is_multilingual") and model.generation_config.is_multilingual:
         # We only need to set the language and task ids in a multilingual setting
         tokenizer.set_prefix_tokens(language=data_args.language, task=data_args.task)
-        model.generation_config.update(
-            **{
-                "language": data_args.language,
-                "task": data_args.task,
-            }
-        )
+        model.generation_config.language = data_args.language
+        model.generation_config.task = data_args.task
     elif data_args.language is not None:
         raise ValueError(
             "Setting language token for an English-only checkpoint is not permitted. The language argument should "
@@ -460,6 +441,9 @@ def main():
             "Please use the `language` and `task` arguments instead"
         )
         model.generation_config.forced_decoder_ids = model_args.forced_decoder_ids
+    else:
+        model.generation_config.forced_decoder_ids = None
+        model.config.forced_decoder_ids = None
 
     if model_args.suppress_tokens is not None:
         logger.warning(
@@ -584,7 +568,7 @@ def main():
         args=training_args,
         train_dataset=vectorized_datasets["train"] if training_args.do_train else None,
         eval_dataset=vectorized_datasets["eval"] if training_args.do_eval else None,
-        tokenizer=feature_extractor,
+        processing_class=feature_extractor,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
     )

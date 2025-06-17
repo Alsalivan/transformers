@@ -12,13 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Auto Config class."""
+"""Auto Config class."""
+
 import importlib
 import os
 import re
 import warnings
 from collections import OrderedDict
-from typing import List, Union
+from collections.abc import Callable, Iterator, KeysView, ValuesView
+from typing import Any, TypeVar, Union
 
 from ...configuration_utils import PretrainedConfig
 from ...dynamic_module_utils import get_class_from_dynamic_module, resolve_trust_remote_code
@@ -28,14 +30,21 @@ from ...utils import CONFIG_NAME, logging
 logger = logging.get_logger(__name__)
 
 
-CONFIG_MAPPING_NAMES = OrderedDict(
+_CallableT = TypeVar("_CallableT", bound=Callable[..., Any])
+
+
+CONFIG_MAPPING_NAMES = OrderedDict[str, str](
     [
         # Add configs here
         ("albert", "AlbertConfig"),
         ("align", "AlignConfig"),
         ("altclip", "AltCLIPConfig"),
+        ("aria", "AriaConfig"),
+        ("aria_text", "AriaTextConfig"),
         ("audio-spectrogram-transformer", "ASTConfig"),
         ("autoformer", "AutoformerConfig"),
+        ("aya_vision", "AyaVisionConfig"),
+        ("bamba", "BambaConfig"),
         ("bark", "BarkConfig"),
         ("bart", "BartConfig"),
         ("beit", "BeitConfig"),
@@ -45,32 +54,43 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("bigbird_pegasus", "BigBirdPegasusConfig"),
         ("biogpt", "BioGptConfig"),
         ("bit", "BitConfig"),
+        ("bitnet", "BitNetConfig"),
         ("blenderbot", "BlenderbotConfig"),
         ("blenderbot-small", "BlenderbotSmallConfig"),
         ("blip", "BlipConfig"),
         ("blip-2", "Blip2Config"),
+        ("blip_2_qformer", "Blip2QFormerConfig"),
         ("bloom", "BloomConfig"),
         ("bridgetower", "BridgeTowerConfig"),
         ("bros", "BrosConfig"),
         ("camembert", "CamembertConfig"),
         ("canine", "CanineConfig"),
+        ("chameleon", "ChameleonConfig"),
         ("chinese_clip", "ChineseCLIPConfig"),
         ("chinese_clip_vision_model", "ChineseCLIPVisionConfig"),
         ("clap", "ClapConfig"),
         ("clip", "CLIPConfig"),
+        ("clip_text_model", "CLIPTextConfig"),
         ("clip_vision_model", "CLIPVisionConfig"),
         ("clipseg", "CLIPSegConfig"),
         ("clvp", "ClvpConfig"),
         ("code_llama", "LlamaConfig"),
         ("codegen", "CodeGenConfig"),
         ("cohere", "CohereConfig"),
+        ("cohere2", "Cohere2Config"),
+        ("colpali", "ColPaliConfig"),
+        ("colqwen2", "ColQwen2Config"),
         ("conditional_detr", "ConditionalDetrConfig"),
         ("convbert", "ConvBertConfig"),
         ("convnext", "ConvNextConfig"),
         ("convnextv2", "ConvNextV2Config"),
         ("cpmant", "CpmAntConfig"),
+        ("csm", "CsmConfig"),
         ("ctrl", "CTRLConfig"),
         ("cvt", "CvtConfig"),
+        ("d_fine", "DFineConfig"),
+        ("dab-detr", "DabDetrConfig"),
+        ("dac", "DacConfig"),
         ("data2vec-audio", "Data2VecAudioConfig"),
         ("data2vec-text", "Data2VecTextConfig"),
         ("data2vec-vision", "Data2VecVisionConfig"),
@@ -78,13 +98,17 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("deberta", "DebertaConfig"),
         ("deberta-v2", "DebertaV2Config"),
         ("decision_transformer", "DecisionTransformerConfig"),
+        ("deepseek_v3", "DeepseekV3Config"),
         ("deformable_detr", "DeformableDetrConfig"),
         ("deit", "DeiTConfig"),
         ("depth_anything", "DepthAnythingConfig"),
+        ("depth_pro", "DepthProConfig"),
         ("deta", "DetaConfig"),
         ("detr", "DetrConfig"),
+        ("diffllama", "DiffLlamaConfig"),
         ("dinat", "DinatConfig"),
         ("dinov2", "Dinov2Config"),
+        ("dinov2_with_registers", "Dinov2WithRegistersConfig"),
         ("distilbert", "DistilBertConfig"),
         ("donut-swin", "DonutSwinConfig"),
         ("dpr", "DPRConfig"),
@@ -92,12 +116,15 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("efficientformer", "EfficientFormerConfig"),
         ("efficientnet", "EfficientNetConfig"),
         ("electra", "ElectraConfig"),
+        ("emu3", "Emu3Config"),
         ("encodec", "EncodecConfig"),
         ("encoder-decoder", "EncoderDecoderConfig"),
         ("ernie", "ErnieConfig"),
         ("ernie_m", "ErnieMConfig"),
         ("esm", "EsmConfig"),
         ("falcon", "FalconConfig"),
+        ("falcon_h1", "FalconH1Config"),
+        ("falcon_mamba", "FalconMambaConfig"),
         ("fastspeech2_conformer", "FastSpeech2ConformerConfig"),
         ("flaubert", "FlaubertConfig"),
         ("flava", "FlavaConfig"),
@@ -107,8 +134,14 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("funnel", "FunnelConfig"),
         ("fuyu", "FuyuConfig"),
         ("gemma", "GemmaConfig"),
+        ("gemma2", "Gemma2Config"),
+        ("gemma3", "Gemma3Config"),
+        ("gemma3_text", "Gemma3TextConfig"),
         ("git", "GitConfig"),
+        ("glm", "GlmConfig"),
+        ("glm4", "Glm4Config"),
         ("glpn", "GLPNConfig"),
+        ("got_ocr2", "GotOcr2Config"),
         ("gpt-sw3", "GPT2Config"),
         ("gpt2", "GPT2Config"),
         ("gpt_bigcode", "GPTBigCodeConfig"),
@@ -117,17 +150,34 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("gpt_neox_japanese", "GPTNeoXJapaneseConfig"),
         ("gptj", "GPTJConfig"),
         ("gptsan-japanese", "GPTSanJapaneseConfig"),
+        ("granite", "GraniteConfig"),
+        ("granite_speech", "GraniteSpeechConfig"),
+        ("granitemoe", "GraniteMoeConfig"),
+        ("granitemoehybrid", "GraniteMoeHybridConfig"),
+        ("granitemoeshared", "GraniteMoeSharedConfig"),
+        ("granitevision", "LlavaNextConfig"),
         ("graphormer", "GraphormerConfig"),
         ("grounding-dino", "GroundingDinoConfig"),
         ("groupvit", "GroupViTConfig"),
+        ("helium", "HeliumConfig"),
+        ("hgnet_v2", "HGNetV2Config"),
+        ("hiera", "HieraConfig"),
         ("hubert", "HubertConfig"),
         ("ibert", "IBertConfig"),
         ("idefics", "IdeficsConfig"),
         ("idefics2", "Idefics2Config"),
+        ("idefics3", "Idefics3Config"),
+        ("idefics3_vision", "Idefics3VisionConfig"),
+        ("ijepa", "IJepaConfig"),
         ("imagegpt", "ImageGPTConfig"),
         ("informer", "InformerConfig"),
         ("instructblip", "InstructBlipConfig"),
+        ("instructblipvideo", "InstructBlipVideoConfig"),
+        ("internvl", "InternVLConfig"),
+        ("internvl_vision", "InternVLVisionConfig"),
         ("jamba", "JambaConfig"),
+        ("janus", "JanusConfig"),
+        ("jetmoe", "JetMoeConfig"),
         ("jukebox", "JukeboxConfig"),
         ("kosmos-2", "Kosmos2Config"),
         ("layoutlm", "LayoutLMConfig"),
@@ -137,14 +187,19 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("levit", "LevitConfig"),
         ("lilt", "LiltConfig"),
         ("llama", "LlamaConfig"),
+        ("llama4", "Llama4Config"),
+        ("llama4_text", "Llama4TextConfig"),
         ("llava", "LlavaConfig"),
         ("llava_next", "LlavaNextConfig"),
+        ("llava_next_video", "LlavaNextVideoConfig"),
+        ("llava_onevision", "LlavaOnevisionConfig"),
         ("longformer", "LongformerConfig"),
         ("longt5", "LongT5Config"),
         ("luke", "LukeConfig"),
         ("lxmert", "LxmertConfig"),
         ("m2m_100", "M2M100Config"),
         ("mamba", "MambaConfig"),
+        ("mamba2", "Mamba2Config"),
         ("marian", "MarianConfig"),
         ("markuplm", "MarkupLMConfig"),
         ("mask2former", "Mask2FormerConfig"),
@@ -155,13 +210,21 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("mega", "MegaConfig"),
         ("megatron-bert", "MegatronBertConfig"),
         ("mgp-str", "MgpstrConfig"),
+        ("mimi", "MimiConfig"),
+        ("minimax", "MiniMaxConfig"),
         ("mistral", "MistralConfig"),
+        ("mistral3", "Mistral3Config"),
         ("mixtral", "MixtralConfig"),
+        ("mlcd", "MLCDVisionConfig"),
+        ("mllama", "MllamaConfig"),
         ("mobilebert", "MobileBertConfig"),
         ("mobilenet_v1", "MobileNetV1Config"),
         ("mobilenet_v2", "MobileNetV2Config"),
         ("mobilevit", "MobileViTConfig"),
         ("mobilevitv2", "MobileViTV2Config"),
+        ("modernbert", "ModernBertConfig"),
+        ("moonshine", "MoonshineConfig"),
+        ("moshi", "MoshiConfig"),
         ("mpnet", "MPNetConfig"),
         ("mpt", "MptConfig"),
         ("mra", "MraConfig"),
@@ -170,17 +233,22 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("musicgen_melody", "MusicgenMelodyConfig"),
         ("mvp", "MvpConfig"),
         ("nat", "NatConfig"),
+        ("nemotron", "NemotronConfig"),
         ("nezha", "NezhaConfig"),
         ("nllb-moe", "NllbMoeConfig"),
         ("nougat", "VisionEncoderDecoderConfig"),
         ("nystromformer", "NystromformerConfig"),
         ("olmo", "OlmoConfig"),
+        ("olmo2", "Olmo2Config"),
+        ("olmoe", "OlmoeConfig"),
+        ("omdet-turbo", "OmDetTurboConfig"),
         ("oneformer", "OneFormerConfig"),
         ("open-llama", "OpenLlamaConfig"),
         ("openai-gpt", "OpenAIGPTConfig"),
         ("opt", "OPTConfig"),
         ("owlv2", "Owlv2Config"),
         ("owlvit", "OwlViTConfig"),
+        ("paligemma", "PaliGemmaConfig"),
         ("patchtsmixer", "PatchTSMixerConfig"),
         ("patchtst", "PatchTSTConfig"),
         ("pegasus", "PegasusConfig"),
@@ -189,16 +257,29 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("persimmon", "PersimmonConfig"),
         ("phi", "PhiConfig"),
         ("phi3", "Phi3Config"),
+        ("phi4_multimodal", "Phi4MultimodalConfig"),
+        ("phimoe", "PhimoeConfig"),
         ("pix2struct", "Pix2StructConfig"),
+        ("pixtral", "PixtralVisionConfig"),
         ("plbart", "PLBartConfig"),
         ("poolformer", "PoolFormerConfig"),
         ("pop2piano", "Pop2PianoConfig"),
+        ("prompt_depth_anything", "PromptDepthAnythingConfig"),
         ("prophetnet", "ProphetNetConfig"),
         ("pvt", "PvtConfig"),
         ("pvt_v2", "PvtV2Config"),
         ("qdqbert", "QDQBertConfig"),
         ("qwen2", "Qwen2Config"),
+        ("qwen2_5_omni", "Qwen2_5OmniConfig"),
+        ("qwen2_5_vl", "Qwen2_5_VLConfig"),
+        ("qwen2_5_vl_text", "Qwen2_5_VLTextConfig"),
+        ("qwen2_audio", "Qwen2AudioConfig"),
+        ("qwen2_audio_encoder", "Qwen2AudioEncoderConfig"),
         ("qwen2_moe", "Qwen2MoeConfig"),
+        ("qwen2_vl", "Qwen2VLConfig"),
+        ("qwen2_vl_text", "Qwen2VLTextConfig"),
+        ("qwen3", "Qwen3Config"),
+        ("qwen3_moe", "Qwen3MoeConfig"),
         ("rag", "RagConfig"),
         ("realm", "RealmConfig"),
         ("recurrent_gemma", "RecurrentGemmaConfig"),
@@ -211,16 +292,26 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("roberta-prelayernorm", "RobertaPreLayerNormConfig"),
         ("roc_bert", "RoCBertConfig"),
         ("roformer", "RoFormerConfig"),
+        ("rt_detr", "RTDetrConfig"),
+        ("rt_detr_resnet", "RTDetrResNetConfig"),
+        ("rt_detr_v2", "RTDetrV2Config"),
         ("rwkv", "RwkvConfig"),
         ("sam", "SamConfig"),
+        ("sam_hq", "SamHQConfig"),
+        ("sam_hq_vision_model", "SamHQVisionConfig"),
+        ("sam_vision_model", "SamVisionConfig"),
         ("seamless_m4t", "SeamlessM4TConfig"),
         ("seamless_m4t_v2", "SeamlessM4Tv2Config"),
         ("segformer", "SegformerConfig"),
         ("seggpt", "SegGptConfig"),
         ("sew", "SEWConfig"),
         ("sew-d", "SEWDConfig"),
+        ("shieldgemma2", "ShieldGemma2Config"),
         ("siglip", "SiglipConfig"),
+        ("siglip2", "Siglip2Config"),
         ("siglip_vision_model", "SiglipVisionConfig"),
+        ("smolvlm", "SmolVLMConfig"),
+        ("smolvlm_vision", "SmolVLMVisionConfig"),
         ("speech-encoder-decoder", "SpeechEncoderDecoderConfig"),
         ("speech_to_text", "Speech2TextConfig"),
         ("speech_to_text_2", "Speech2Text2Config"),
@@ -229,6 +320,7 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("squeezebert", "SqueezeBertConfig"),
         ("stablelm", "StableLmConfig"),
         ("starcoder2", "Starcoder2Config"),
+        ("superglue", "SuperGlueConfig"),
         ("superpoint", "SuperPointConfig"),
         ("swiftformer", "SwiftFormerConfig"),
         ("swin", "SwinConfig"),
@@ -238,9 +330,12 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("t5", "T5Config"),
         ("table-transformer", "TableTransformerConfig"),
         ("tapas", "TapasConfig"),
+        ("textnet", "TextNetConfig"),
         ("time_series_transformer", "TimeSeriesTransformerConfig"),
+        ("timesfm", "TimesFmConfig"),
         ("timesformer", "TimesformerConfig"),
         ("timm_backbone", "TimmBackboneConfig"),
+        ("timm_wrapper", "TimmWrapperConfig"),
         ("trajectory_transformer", "TrajectoryTransformerConfig"),
         ("transfo-xl", "TransfoXLConfig"),
         ("trocr", "TrOCRConfig"),
@@ -253,6 +348,7 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("univnet", "UnivNetConfig"),
         ("upernet", "UperNetConfig"),
         ("van", "VanConfig"),
+        ("video_llava", "VideoLlavaConfig"),
         ("videomae", "VideoMAEConfig"),
         ("vilt", "ViltConfig"),
         ("vipllava", "VipLlavaConfig"),
@@ -265,8 +361,11 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("vit_msn", "ViTMSNConfig"),
         ("vitdet", "VitDetConfig"),
         ("vitmatte", "VitMatteConfig"),
+        ("vitpose", "VitPoseConfig"),
+        ("vitpose_backbone", "VitPoseBackboneConfig"),
         ("vits", "VitsConfig"),
         ("vivit", "VivitConfig"),
+        ("vjepa2", "VJEPA2Config"),
         ("wav2vec2", "Wav2Vec2Config"),
         ("wav2vec2-bert", "Wav2Vec2BertConfig"),
         ("wav2vec2-conformer", "Wav2Vec2ConformerConfig"),
@@ -282,18 +381,25 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("xmod", "XmodConfig"),
         ("yolos", "YolosConfig"),
         ("yoso", "YosoConfig"),
+        ("zamba", "ZambaConfig"),
+        ("zamba2", "Zamba2Config"),
+        ("zoedepth", "ZoeDepthConfig"),
     ]
 )
 
 
-MODEL_NAMES_MAPPING = OrderedDict(
+MODEL_NAMES_MAPPING = OrderedDict[str, str](
     [
         # Add full (and cased) model names here
         ("albert", "ALBERT"),
         ("align", "ALIGN"),
         ("altclip", "AltCLIP"),
+        ("aria", "Aria"),
+        ("aria_text", "AriaText"),
         ("audio-spectrogram-transformer", "Audio Spectrogram Transformer"),
         ("autoformer", "Autoformer"),
+        ("aya_vision", "AyaVision"),
+        ("bamba", "Bamba"),
         ("bark", "Bark"),
         ("bart", "BART"),
         ("barthez", "BARThez"),
@@ -307,10 +413,12 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("bigbird_pegasus", "BigBird-Pegasus"),
         ("biogpt", "BioGpt"),
         ("bit", "BiT"),
+        ("bitnet", "BitNet"),
         ("blenderbot", "Blenderbot"),
         ("blenderbot-small", "BlenderbotSmall"),
         ("blip", "BLIP"),
         ("blip-2", "BLIP-2"),
+        ("blip_2_qformer", "BLIP-2 QFormer"),
         ("bloom", "BLOOM"),
         ("bort", "BORT"),
         ("bridgetower", "BridgeTower"),
@@ -318,24 +426,33 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("byt5", "ByT5"),
         ("camembert", "CamemBERT"),
         ("canine", "CANINE"),
+        ("chameleon", "Chameleon"),
         ("chinese_clip", "Chinese-CLIP"),
         ("chinese_clip_vision_model", "ChineseCLIPVisionModel"),
         ("clap", "CLAP"),
         ("clip", "CLIP"),
+        ("clip_text_model", "CLIPTextModel"),
         ("clip_vision_model", "CLIPVisionModel"),
         ("clipseg", "CLIPSeg"),
         ("clvp", "CLVP"),
         ("code_llama", "CodeLlama"),
         ("codegen", "CodeGen"),
         ("cohere", "Cohere"),
+        ("cohere2", "Cohere2"),
+        ("colpali", "ColPali"),
+        ("colqwen2", "ColQwen2"),
         ("conditional_detr", "Conditional DETR"),
         ("convbert", "ConvBERT"),
         ("convnext", "ConvNeXT"),
         ("convnextv2", "ConvNeXTV2"),
         ("cpm", "CPM"),
         ("cpmant", "CPM-Ant"),
+        ("csm", "CSM"),
         ("ctrl", "CTRL"),
         ("cvt", "CvT"),
+        ("d_fine", "D-FINE"),
+        ("dab-detr", "DAB-DETR"),
+        ("dac", "DAC"),
         ("data2vec-audio", "Data2VecAudio"),
         ("data2vec-text", "Data2VecText"),
         ("data2vec-vision", "Data2VecVision"),
@@ -343,15 +460,20 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("deberta", "DeBERTa"),
         ("deberta-v2", "DeBERTa-v2"),
         ("decision_transformer", "Decision Transformer"),
+        ("deepseek_v3", "DeepSeek-V3"),
         ("deformable_detr", "Deformable DETR"),
         ("deit", "DeiT"),
         ("deplot", "DePlot"),
         ("depth_anything", "Depth Anything"),
+        ("depth_anything_v2", "Depth Anything V2"),
+        ("depth_pro", "DepthPro"),
         ("deta", "DETA"),
         ("detr", "DETR"),
         ("dialogpt", "DialoGPT"),
+        ("diffllama", "DiffLlama"),
         ("dinat", "DiNAT"),
         ("dinov2", "DINOv2"),
+        ("dinov2_with_registers", "DINOv2 with Registers"),
         ("distilbert", "DistilBERT"),
         ("dit", "DiT"),
         ("donut-swin", "DonutSwin"),
@@ -360,12 +482,16 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("efficientformer", "EfficientFormer"),
         ("efficientnet", "EfficientNet"),
         ("electra", "ELECTRA"),
+        ("emu3", "Emu3"),
         ("encodec", "EnCodec"),
         ("encoder-decoder", "Encoder decoder"),
         ("ernie", "ERNIE"),
         ("ernie_m", "ErnieM"),
         ("esm", "ESM"),
         ("falcon", "Falcon"),
+        ("falcon3", "Falcon3"),
+        ("falcon_h1", "FalconH1"),
+        ("falcon_mamba", "FalconMamba"),
         ("fastspeech2_conformer", "FastSpeech2Conformer"),
         ("flan-t5", "FLAN-T5"),
         ("flan-ul2", "FLAN-UL2"),
@@ -377,8 +503,14 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("funnel", "Funnel Transformer"),
         ("fuyu", "Fuyu"),
         ("gemma", "Gemma"),
+        ("gemma2", "Gemma2"),
+        ("gemma3", "Gemma3ForConditionalGeneration"),
+        ("gemma3_text", "Gemma3ForCausalLM"),
         ("git", "GIT"),
+        ("glm", "GLM"),
+        ("glm4", "glm4"),
         ("glpn", "GLPN"),
+        ("got_ocr2", "GOT-OCR2"),
         ("gpt-sw3", "GPT-Sw3"),
         ("gpt2", "OpenAI GPT-2"),
         ("gpt_bigcode", "GPTBigCode"),
@@ -387,18 +519,35 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("gpt_neox_japanese", "GPT NeoX Japanese"),
         ("gptj", "GPT-J"),
         ("gptsan-japanese", "GPTSAN-japanese"),
+        ("granite", "Granite"),
+        ("granite_speech", "GraniteSpeech"),
+        ("granitemoe", "GraniteMoeMoe"),
+        ("granitemoehybrid", "GraniteMoeHybrid"),
+        ("granitemoeshared", "GraniteMoeSharedMoe"),
+        ("granitevision", "LLaVA-NeXT"),
         ("graphormer", "Graphormer"),
         ("grounding-dino", "Grounding DINO"),
         ("groupvit", "GroupViT"),
+        ("helium", "Helium"),
         ("herbert", "HerBERT"),
+        ("hgnet_v2", "HGNet-V2"),
+        ("hiera", "Hiera"),
         ("hubert", "Hubert"),
         ("ibert", "I-BERT"),
         ("idefics", "IDEFICS"),
         ("idefics2", "Idefics2"),
+        ("idefics3", "Idefics3"),
+        ("idefics3_vision", "Idefics3VisionTransformer"),
+        ("ijepa", "I-JEPA"),
         ("imagegpt", "ImageGPT"),
         ("informer", "Informer"),
         ("instructblip", "InstructBLIP"),
+        ("instructblipvideo", "InstructBlipVideo"),
+        ("internvl", "InternVL"),
+        ("internvl_vision", "InternVLVision"),
         ("jamba", "Jamba"),
+        ("janus", "Janus"),
+        ("jetmoe", "JetMoe"),
         ("jukebox", "Jukebox"),
         ("kosmos-2", "KOSMOS-2"),
         ("layoutlm", "LayoutLM"),
@@ -411,8 +560,12 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("llama", "LLaMA"),
         ("llama2", "Llama2"),
         ("llama3", "Llama3"),
+        ("llama4", "Llama4"),
+        ("llama4_text", "Llama4ForCausalLM"),
         ("llava", "LLaVa"),
         ("llava_next", "LLaVA-NeXT"),
+        ("llava_next_video", "LLaVa-NeXT-Video"),
+        ("llava_onevision", "LLaVA-Onevision"),
         ("longformer", "Longformer"),
         ("longt5", "LongT5"),
         ("luke", "LUKE"),
@@ -420,6 +573,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("m2m_100", "M2M100"),
         ("madlad-400", "MADLAD-400"),
         ("mamba", "Mamba"),
+        ("mamba2", "mamba2"),
         ("marian", "Marian"),
         ("markuplm", "MarkupLM"),
         ("mask2former", "Mask2Former"),
@@ -433,8 +587,13 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("megatron-bert", "Megatron-BERT"),
         ("megatron_gpt2", "Megatron-GPT2"),
         ("mgp-str", "MGP-STR"),
+        ("mimi", "Mimi"),
+        ("minimax", "MiniMax"),
         ("mistral", "Mistral"),
+        ("mistral3", "Mistral3"),
         ("mixtral", "Mixtral"),
+        ("mlcd", "MLCD"),
+        ("mllama", "Mllama"),
         ("mluke", "mLUKE"),
         ("mms", "MMS"),
         ("mobilebert", "MobileBERT"),
@@ -442,6 +601,9 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("mobilenet_v2", "MobileNetV2"),
         ("mobilevit", "MobileViT"),
         ("mobilevitv2", "MobileViTV2"),
+        ("modernbert", "ModernBERT"),
+        ("moonshine", "Moonshine"),
+        ("moshi", "Moshi"),
         ("mpnet", "MPNet"),
         ("mpt", "MPT"),
         ("mra", "MRA"),
@@ -449,19 +611,25 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("musicgen", "MusicGen"),
         ("musicgen_melody", "MusicGen Melody"),
         ("mvp", "MVP"),
+        ("myt5", "myt5"),
         ("nat", "NAT"),
+        ("nemotron", "Nemotron"),
         ("nezha", "Nezha"),
         ("nllb", "NLLB"),
         ("nllb-moe", "NLLB-MOE"),
         ("nougat", "Nougat"),
         ("nystromformer", "Nyströmformer"),
         ("olmo", "OLMo"),
+        ("olmo2", "OLMo2"),
+        ("olmoe", "OLMoE"),
+        ("omdet-turbo", "OmDet-Turbo"),
         ("oneformer", "OneFormer"),
         ("open-llama", "OpenLlama"),
         ("openai-gpt", "OpenAI GPT"),
         ("opt", "OPT"),
         ("owlv2", "OWLv2"),
         ("owlvit", "OWL-ViT"),
+        ("paligemma", "PaliGemma"),
         ("patchtsmixer", "PatchTSMixer"),
         ("patchtst", "PatchTST"),
         ("pegasus", "Pegasus"),
@@ -470,17 +638,30 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("persimmon", "Persimmon"),
         ("phi", "Phi"),
         ("phi3", "Phi3"),
+        ("phi4_multimodal", "Phi4Multimodal"),
+        ("phimoe", "Phimoe"),
         ("phobert", "PhoBERT"),
         ("pix2struct", "Pix2Struct"),
+        ("pixtral", "Pixtral"),
         ("plbart", "PLBart"),
         ("poolformer", "PoolFormer"),
         ("pop2piano", "Pop2Piano"),
+        ("prompt_depth_anything", "PromptDepthAnything"),
         ("prophetnet", "ProphetNet"),
         ("pvt", "PVT"),
         ("pvt_v2", "PVTv2"),
         ("qdqbert", "QDQBert"),
         ("qwen2", "Qwen2"),
+        ("qwen2_5_omni", "Qwen2_5Omni"),
+        ("qwen2_5_vl", "Qwen2_5_VL"),
+        ("qwen2_5_vl_text", "Qwen2_5_VL"),
+        ("qwen2_audio", "Qwen2Audio"),
+        ("qwen2_audio_encoder", "Qwen2AudioEncoder"),
         ("qwen2_moe", "Qwen2MoE"),
+        ("qwen2_vl", "Qwen2VL"),
+        ("qwen2_vl_text", "Qwen2VL"),
+        ("qwen3", "Qwen3"),
+        ("qwen3_moe", "Qwen3MoE"),
         ("rag", "RAG"),
         ("realm", "REALM"),
         ("recurrent_gemma", "RecurrentGemma"),
@@ -493,16 +674,27 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("roberta-prelayernorm", "RoBERTa-PreLayerNorm"),
         ("roc_bert", "RoCBert"),
         ("roformer", "RoFormer"),
+        ("rt_detr", "RT-DETR"),
+        ("rt_detr_resnet", "RT-DETR-ResNet"),
+        ("rt_detr_v2", "RT-DETRv2"),
         ("rwkv", "RWKV"),
         ("sam", "SAM"),
+        ("sam_hq", "SAM-HQ"),
+        ("sam_hq_vision_model", "SamHQVisionModel"),
+        ("sam_vision_model", "SamVisionModel"),
         ("seamless_m4t", "SeamlessM4T"),
         ("seamless_m4t_v2", "SeamlessM4Tv2"),
         ("segformer", "SegFormer"),
         ("seggpt", "SegGPT"),
         ("sew", "SEW"),
         ("sew-d", "SEW-D"),
+        ("shieldgemma2", "Shieldgemma2"),
         ("siglip", "SigLIP"),
+        ("siglip2", "SigLIP2"),
+        ("siglip2_vision_model", "Siglip2VisionModel"),
         ("siglip_vision_model", "SiglipVisionModel"),
+        ("smolvlm", "SmolVLM"),
+        ("smolvlm_vision", "SmolVLMVisionTransformer"),
         ("speech-encoder-decoder", "Speech Encoder decoder"),
         ("speech_to_text", "Speech2Text"),
         ("speech_to_text_2", "Speech2Text2"),
@@ -511,6 +703,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("squeezebert", "SqueezeBERT"),
         ("stablelm", "StableLm"),
         ("starcoder2", "Starcoder2"),
+        ("superglue", "SuperGlue"),
         ("superpoint", "SuperPoint"),
         ("swiftformer", "SwiftFormer"),
         ("swin", "Swin Transformer"),
@@ -522,9 +715,12 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("table-transformer", "Table Transformer"),
         ("tapas", "TAPAS"),
         ("tapex", "TAPEX"),
+        ("textnet", "TextNet"),
         ("time_series_transformer", "Time Series Transformer"),
+        ("timesfm", "TimesFm"),
         ("timesformer", "TimeSformer"),
         ("timm_backbone", "TimmBackbone"),
+        ("timm_wrapper", "TimmWrapperModel"),
         ("trajectory_transformer", "Trajectory Transformer"),
         ("transfo-xl", "Transformer-XL"),
         ("trocr", "TrOCR"),
@@ -538,6 +734,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("univnet", "UnivNet"),
         ("upernet", "UPerNet"),
         ("van", "VAN"),
+        ("video_llava", "VideoLlava"),
         ("videomae", "VideoMAE"),
         ("vilt", "ViLT"),
         ("vipllava", "VipLlava"),
@@ -550,8 +747,11 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("vit_msn", "ViTMSN"),
         ("vitdet", "VitDet"),
         ("vitmatte", "ViTMatte"),
+        ("vitpose", "ViTPose"),
+        ("vitpose_backbone", "ViTPoseBackbone"),
         ("vits", "VITS"),
         ("vivit", "ViViT"),
+        ("vjepa2", "VJEPA2Model"),
         ("wav2vec2", "Wav2Vec2"),
         ("wav2vec2-bert", "Wav2Vec2-BERT"),
         ("wav2vec2-conformer", "Wav2Vec2-Conformer"),
@@ -571,6 +771,9 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("xmod", "X-MOD"),
         ("yolos", "YOLOS"),
         ("yoso", "YOSO"),
+        ("zamba", "Zamba"),
+        ("zamba2", "Zamba2"),
+        ("zoedepth", "ZoeDepth"),
     ]
 )
 
@@ -578,17 +781,32 @@ MODEL_NAMES_MAPPING = OrderedDict(
 # `transfo-xl` (as in `CONFIG_MAPPING_NAMES`), we should use `transfo_xl`.
 DEPRECATED_MODELS = [
     "bort",
+    "deta",
+    "efficientformer",
+    "ernie_m",
+    "gptsan_japanese",
+    "graphormer",
+    "jukebox",
     "mctct",
+    "mega",
     "mmbt",
+    "nat",
+    "nezha",
     "open_llama",
+    "qdqbert",
+    "realm",
     "retribert",
+    "speech_to_text_2",
     "tapex",
     "trajectory_transformer",
     "transfo_xl",
+    "tvlt",
     "van",
+    "vit_hybrid",
+    "xlm_prophetnet",
 ]
 
-SPECIAL_MODEL_TYPE_TO_MODULE_NAME = OrderedDict(
+SPECIAL_MODEL_TYPE_TO_MODULE_NAME = OrderedDict[str, str](
     [
         ("openai-gpt", "openai"),
         ("data2vec-audio", "data2vec"),
@@ -599,17 +817,36 @@ SPECIAL_MODEL_TYPE_TO_MODULE_NAME = OrderedDict(
         ("maskformer-swin", "maskformer"),
         ("xclip", "x_clip"),
         ("clip_vision_model", "clip"),
+        ("qwen2_audio_encoder", "qwen2_audio"),
+        ("clip_text_model", "clip"),
+        ("aria_text", "aria"),
+        ("gemma3_text", "gemma3"),
+        ("idefics3_vision", "idefics3"),
         ("siglip_vision_model", "siglip"),
+        ("smolvlm_vision", "smolvlm"),
         ("chinese_clip_vision_model", "chinese_clip"),
+        ("rt_detr_resnet", "rt_detr"),
+        ("granitevision", "llava_next"),
+        ("internvl_vision", "internvl"),
+        ("qwen2_5_vl_text", "qwen2_5_vl"),
+        ("qwen2_vl_text", "qwen2_vl"),
+        ("sam_vision_model", "sam"),
+        ("sam_hq_vision_model", "sam_hq"),
+        ("llama4_text", "llama4"),
+        ("blip_2_qformer", "blip_2"),
     ]
 )
 
 
-def model_type_to_module_name(key):
+def model_type_to_module_name(key) -> str:
     """Converts a config key to the corresponding module."""
     # Special treatment
     if key in SPECIAL_MODEL_TYPE_TO_MODULE_NAME:
-        return SPECIAL_MODEL_TYPE_TO_MODULE_NAME[key]
+        key = SPECIAL_MODEL_TYPE_TO_MODULE_NAME[key]
+
+        if key in DEPRECATED_MODELS:
+            key = f"deprecated.{key}"
+        return key
 
     key = key.replace("-", "_")
     if key in DEPRECATED_MODELS:
@@ -618,7 +855,7 @@ def model_type_to_module_name(key):
     return key
 
 
-def config_class_to_model_type(config):
+def config_class_to_model_type(config) -> Union[str, None]:
     """Converts a config class name to the corresponding model type"""
     for key, cls in CONFIG_MAPPING_NAMES.items():
         if cls == config:
@@ -630,17 +867,17 @@ def config_class_to_model_type(config):
     return None
 
 
-class _LazyConfigMapping(OrderedDict):
+class _LazyConfigMapping(OrderedDict[str, type[PretrainedConfig]]):
     """
     A dictionary that lazily load its values when they are requested.
     """
 
-    def __init__(self, mapping):
+    def __init__(self, mapping) -> None:
         self._mapping = mapping
         self._extra_content = {}
         self._modules = {}
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> type[PretrainedConfig]:
         if key in self._extra_content:
             return self._extra_content[key]
         if key not in self._mapping:
@@ -657,22 +894,22 @@ class _LazyConfigMapping(OrderedDict):
         transformers_module = importlib.import_module("transformers")
         return getattr(transformers_module, value)
 
-    def keys(self):
+    def keys(self) -> list[str]:
         return list(self._mapping.keys()) + list(self._extra_content.keys())
 
-    def values(self):
+    def values(self) -> list[type[PretrainedConfig]]:
         return [self[k] for k in self._mapping.keys()] + list(self._extra_content.values())
 
-    def items(self):
+    def items(self) -> list[tuple[str, type[PretrainedConfig]]]:
         return [(k, self[k]) for k in self._mapping.keys()] + list(self._extra_content.items())
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(list(self._mapping.keys()) + list(self._extra_content.keys()))
 
-    def __contains__(self, item):
+    def __contains__(self, item: object) -> bool:
         return item in self._mapping or item in self._extra_content
 
-    def register(self, key, value, exist_ok=False):
+    def register(self, key: str, value: type[PretrainedConfig], exist_ok=False) -> None:
         """
         Register a new configuration in this mapping.
         """
@@ -684,7 +921,7 @@ class _LazyConfigMapping(OrderedDict):
 CONFIG_MAPPING = _LazyConfigMapping(CONFIG_MAPPING_NAMES)
 
 
-class _LazyLoadAllMappings(OrderedDict):
+class _LazyLoadAllMappings(OrderedDict[str, str]):
     """
     A mapping that will load all pairs of key values at the first access (either by indexing, requestions keys, values,
     etc.)
@@ -714,28 +951,28 @@ class _LazyLoadAllMappings(OrderedDict):
         self._initialize()
         return self._data[key]
 
-    def keys(self):
+    def keys(self) -> KeysView[str]:
         self._initialize()
         return self._data.keys()
 
-    def values(self):
+    def values(self) -> ValuesView[str]:
         self._initialize()
         return self._data.values()
 
-    def items(self):
+    def items(self) -> KeysView[str]:
         self._initialize()
         return self._data.keys()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         self._initialize()
         return iter(self._data)
 
-    def __contains__(self, item):
+    def __contains__(self, item: object) -> bool:
         self._initialize()
         return item in self._data
 
 
-def _get_class_name(model_class: Union[str, List[str]]):
+def _get_class_name(model_class: Union[str, list[str]]):
     if isinstance(model_class, (list, tuple)):
         return " or ".join([f"[`{c}`]" for c in model_class if c is not None])
     return f"[`{model_class}`]"
@@ -774,7 +1011,9 @@ def _list_model_options(indent, config_to_class=None, use_model_types=True):
     return "\n".join(lines)
 
 
-def replace_list_option_in_docstrings(config_to_class=None, use_model_types=True):
+def replace_list_option_in_docstrings(
+    config_to_class=None, use_model_types: bool = True
+) -> Callable[[_CallableT], _CallableT]:
     def docstring_decorator(fn):
         docstrings = fn.__doc__
         if docstrings is None:
@@ -809,14 +1048,14 @@ class AutoConfig:
     This class cannot be instantiated directly using `__init__()` (throws an error).
     """
 
-    def __init__(self):
-        raise EnvironmentError(
+    def __init__(self) -> None:
+        raise OSError(
             "AutoConfig is designed to be instantiated "
             "using the `AutoConfig.from_pretrained(pretrained_model_name_or_path)` method."
         )
 
     @classmethod
-    def for_model(cls, model_type: str, *args, **kwargs):
+    def for_model(cls, model_type: str, *args, **kwargs) -> PretrainedConfig:
         if model_type in CONFIG_MAPPING:
             config_class = CONFIG_MAPPING[model_type]
             return config_class(*args, **kwargs)
@@ -826,7 +1065,7 @@ class AutoConfig:
 
     @classmethod
     @replace_list_option_in_docstrings()
-    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+    def from_pretrained(cls, pretrained_model_name_or_path: Union[str, os.PathLike[str]], **kwargs):
         r"""
         Instantiate one of the configuration classes of the library from a pretrained model configuration.
 
@@ -928,17 +1167,21 @@ class AutoConfig:
         config_dict, unused_kwargs = PretrainedConfig.get_config_dict(pretrained_model_name_or_path, **kwargs)
         has_remote_code = "auto_map" in config_dict and "AutoConfig" in config_dict["auto_map"]
         has_local_code = "model_type" in config_dict and config_dict["model_type"] in CONFIG_MAPPING
-        trust_remote_code = resolve_trust_remote_code(
-            trust_remote_code, pretrained_model_name_or_path, has_local_code, has_remote_code
-        )
+        if has_remote_code:
+            class_ref = config_dict["auto_map"]["AutoConfig"]
+            if "--" in class_ref:
+                upstream_repo = class_ref.split("--")[0]
+            else:
+                upstream_repo = None
+            trust_remote_code = resolve_trust_remote_code(
+                trust_remote_code, pretrained_model_name_or_path, has_local_code, has_remote_code, upstream_repo
+            )
 
         if has_remote_code and trust_remote_code:
-            class_ref = config_dict["auto_map"]["AutoConfig"]
             config_class = get_class_from_dynamic_module(
                 class_ref, pretrained_model_name_or_path, code_revision=code_revision, **kwargs
             )
-            if os.path.isdir(pretrained_model_name_or_path):
-                config_class.register_for_auto_class()
+            config_class.register_for_auto_class()
             return config_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
         elif "model_type" in config_dict:
             try:
@@ -947,7 +1190,12 @@ class AutoConfig:
                 raise ValueError(
                     f"The checkpoint you are trying to load has model type `{config_dict['model_type']}` "
                     "but Transformers does not recognize this architecture. This could be because of an "
-                    "issue with the checkpoint, or because your version of Transformers is out of date."
+                    "issue with the checkpoint, or because your version of Transformers is out of date.\n\n"
+                    "You can update Transformers with the command `pip install --upgrade transformers`. If this "
+                    "does not work, and the checkpoint is very new, then there may not be a release version "
+                    "that supports this model yet. In this case, you can get the most up-to-date code by installing "
+                    "Transformers from source with the command "
+                    "`pip install git+https://github.com/huggingface/transformers.git`"
                 )
             return config_class.from_dict(config_dict, **unused_kwargs)
         else:
@@ -964,7 +1212,7 @@ class AutoConfig:
         )
 
     @staticmethod
-    def register(model_type, config, exist_ok=False):
+    def register(model_type, config, exist_ok=False) -> None:
         """
         Register a new configuration for this class.
 
@@ -979,3 +1227,6 @@ class AutoConfig:
                 "match!"
             )
         CONFIG_MAPPING.register(model_type, config, exist_ok=exist_ok)
+
+
+__all__ = ["CONFIG_MAPPING", "MODEL_NAMES_MAPPING", "AutoConfig"]

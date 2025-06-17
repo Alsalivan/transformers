@@ -13,8 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization classes for BERTweet"""
-
+"""Tokenization classes for BERTweet"""
 
 import html
 import os
@@ -765,3 +764,6 @@ def casual_tokenize(text, preserve_case=True, reduce_len=False, strip_handles=Fa
 
 
 ###############################################################################
+
+
+__all__ = ["BertweetTokenizer"]

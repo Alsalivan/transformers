@@ -13,8 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TF 2.0 MobileBERT model."""
-
+"""TF 2.0 MobileBERT model."""
 
 from __future__ import annotations
 
@@ -241,7 +240,7 @@ class TFMobileBertEmbeddings(keras.layers.Layer):
 
         if self.trigram_input:
             # From the paper MobileBERT: a Compact Task-Agnostic BERT for Resource-Limited
-            # Devices (https://arxiv.org/abs/2004.02984)
+            # Devices (https://huggingface.co/papers/2004.02984)
             #
             # The embedding table in BERT models accounts for a substantial proportion of model size. To compress
             # the embedding layer, we reduce the embedding dimension to 128 in MobileBERT.
@@ -1064,8 +1063,8 @@ class TFMobileBertForPreTrainingOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    prediction_logits: tf.Tensor = None
-    seq_relationship_logits: tf.Tensor = None
+    prediction_logits: Optional[tf.Tensor] = None
+    seq_relationship_logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor] | None = None
     attentions: Tuple[tf.Tensor] | None = None
 
@@ -1965,3 +1964,17 @@ class TFMobileBertForTokenClassification(TFMobileBertPreTrainedModel, TFTokenCla
         if getattr(self, "classifier", None) is not None:
             with tf.name_scope(self.classifier.name):
                 self.classifier.build([None, None, self.config.hidden_size])
+
+
+__all__ = [
+    "TFMobileBertForMaskedLM",
+    "TFMobileBertForMultipleChoice",
+    "TFMobileBertForNextSentencePrediction",
+    "TFMobileBertForPreTraining",
+    "TFMobileBertForQuestionAnswering",
+    "TFMobileBertForSequenceClassification",
+    "TFMobileBertForTokenClassification",
+    "TFMobileBertMainLayer",
+    "TFMobileBertModel",
+    "TFMobileBertPreTrainedModel",
+]

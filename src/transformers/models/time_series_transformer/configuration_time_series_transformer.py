@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Time Series Transformer model configuration"""
+"""Time Series Transformer model configuration"""
 
 from typing import List, Optional, Union
 
@@ -224,3 +224,6 @@ class TimeSeriesTransformerConfig(PretrainedConfig):
             + self.num_static_real_features
             + self.input_size * 2  # the log1p(abs(loc)) and log(scale) features
         )
+
+
+__all__ = ["TimeSeriesTransformerConfig"]

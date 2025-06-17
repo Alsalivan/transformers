@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization class for model T5."""
-
+"""Tokenization class for model T5."""
 
 import os
 import re
@@ -31,6 +30,7 @@ from ...tokenization_utils_base import AddedToken
 if TYPE_CHECKING:
     from ...tokenization_utils_base import TextInput
 from ...utils import logging
+from ...utils.import_utils import requires
 
 
 logger = logging.get_logger(__name__)
@@ -38,11 +38,10 @@ logger = logging.get_logger(__name__)
 VOCAB_FILES_NAMES = {"vocab_file": "spiece.model"}
 
 
-# TODO(PVP) - this should be removed in Transformers v5
-
 SPIECE_UNDERLINE = "▁"
 
 
+@requires(backends=("sentencepiece",))
 class T5Tokenizer(PreTrainedTokenizer):
     """
     Construct a T5 tokenizer. Based on [SentencePiece](https://github.com/google/sentencepiece).
@@ -390,9 +389,8 @@ class T5Tokenizer(PreTrainedTokenizer):
         `unk_token`. Here is an example with `unk_token = "<unk>"` and `unk_token_length = 4`.
         `self.tokenizer.sp_model.encode("<unk> Hey", out_type = str)[4:]`.
         """
-        tokens = self.sp_model.encode(text, out_type=str)
         if self.legacy or not text.startswith((SPIECE_UNDERLINE, " ")):
-            return tokens
+            return self.sp_model.encode(text, out_type=str)
 
         # 1. Encode string + prefix ex: "<unk> Hey"
         tokens = self.sp_model.encode(self.unk_token + text, out_type=str)
@@ -447,3 +445,6 @@ class T5Tokenizer(PreTrainedTokenizer):
                 fi.write(content_spiece_model)
 
         return (out_vocab_file,)
+
+
+__all__ = ["T5Tokenizer"]

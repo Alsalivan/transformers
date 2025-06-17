@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -326,8 +325,8 @@ class ImageTransformsTester(unittest.TestCase):
 
         # Test float16 image input keeps float16 dtype
         image = np.random.randint(0, 256, (224, 224, 3)).astype(np.float16) / 255
-        mean = (0.5, 0.6, 0.7)
-        std = (0.1, 0.2, 0.3)
+        mean = np.array((0.5, 0.6, 0.7))
+        std = np.array((0.1, 0.2, 0.3))
 
         # The mean and std are cast to match the dtype of the input image
         cast_mean = np.array(mean, dtype=np.float16)
@@ -368,6 +367,10 @@ class ImageTransformsTester(unittest.TestCase):
         self.assertIsInstance(cropped_image, np.ndarray)
         self.assertEqual(cropped_image.shape, (300, 260, 3))
         self.assertTrue(np.allclose(cropped_image, expected_image))
+
+        # Test that odd numbered padding requirement still leads to correct output dimensions
+        cropped_image = center_crop(image, (300, 259), data_format="channels_last")
+        self.assertEqual(cropped_image.shape, (300, 259, 3))
 
         # Test image with 4 channels is cropped correctly
         image = np.random.randint(0, 256, (224, 224, 4))
@@ -568,6 +571,25 @@ class ImageTransformsTester(unittest.TestCase):
             [[0, 0], [0, 1], [2, 3]],
             [[0, 0], [0, 0], [0, 0]],
         ])
+        # fmt: on
+        self.assertTrue(
+            np.allclose(
+                expected_image, pad(image, ((0, 1), (1, 0)), mode="constant", input_data_format="channels_last")
+            )
+        )
+
+        # Test that padding works on batched images
+        image = np.array(
+            [
+                [[0, 1], [2, 3]],
+            ]
+        )[None, ...]
+        expected_image = np.array(
+            [
+                [[0, 0], [0, 1], [2, 3]],
+                [[0, 0], [0, 0], [0, 0]],
+            ]
+        )[None, ...]
         # fmt: on
         self.assertTrue(
             np.allclose(

@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Pop2Piano model configuration"""
-
+"""Pop2Piano model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -123,3 +122,6 @@ class Pop2PianoConfig(PretrainedConfig):
             is_encoder_decoder=is_encoder_decoder,
             **kwargs,
         )
+
+
+__all__ = ["Pop2PianoConfig"]

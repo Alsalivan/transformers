@@ -17,6 +17,18 @@ rendered properly in your Markdown viewer.
 # XLM-ProphetNet
 
 <div class="flex flex-wrap space-x-1">
+<img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-DE3412?style=flat&logo=pytorch&logoColor=white">
+</div>
+
+<Tip warning={true}>
+
+This model is in maintenance mode only, we don't accept any new PRs changing its code.
+If you run into any issues running this model, please reinstall the last version that supported this model: v4.40.2.
+You can do so by running the following command: `pip install -U transformers==4.40.2`.
+
+</Tip>
+
+<div class="flex flex-wrap space-x-1">
 <a href="https://huggingface.co/models?filter=xprophetnet">
 <img alt="Models" src="https://img.shields.io/badge/All_model_pages-xprophetnet-blueviolet">
 </a>
@@ -31,7 +43,7 @@ rendered properly in your Markdown viewer.
 
 ## Overview
 
-The XLM-ProphetNet model was proposed in [ProphetNet: Predicting Future N-gram for Sequence-to-Sequence Pre-training,](https://arxiv.org/abs/2001.04063) by Yu Yan, Weizhen Qi, Yeyun Gong, Dayiheng Liu, Nan Duan, Jiusheng Chen, Ruofei
+The XLM-ProphetNet model was proposed in [ProphetNet: Predicting Future N-gram for Sequence-to-Sequence Pre-training,](https://huggingface.co/papers/2001.04063) by Yu Yan, Weizhen Qi, Yeyun Gong, Dayiheng Liu, Nan Duan, Jiusheng Chen, Ruofei
 Zhang, Ming Zhou on 13 Jan, 2020.
 
 XLM-ProphetNet is an encoder-decoder model and can predict n-future tokens for "ngram" language modeling instead of

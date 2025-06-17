@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Testing suite for the PyTorch MaskFormer model. """
+"""Testing suite for the PyTorch MaskFormer model."""
 
 import copy
 import unittest
@@ -22,6 +21,7 @@ import numpy as np
 from tests.test_modeling_common import floats_tensor
 from transformers import DetrConfig, MaskFormerConfig, SwinConfig, is_torch_available, is_vision_available
 from transformers.testing_utils import (
+    require_timm,
     require_torch,
     require_torch_accelerator,
     require_torch_fp16,
@@ -142,7 +142,7 @@ class MaskFormerModelTester:
 
             output = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
             output = model(pixel_values, output_hidden_states=True)
-        # the correct shape of output.transformer_decoder_hidden_states ensure the correcteness of the
+        # the correct shape of output.transformer_decoder_hidden_states ensure the correctness of the
         # encoder and pixel decoder
         self.parent.assertEqual(
             output.transformer_decoder_last_hidden_state.shape,
@@ -208,6 +208,7 @@ class MaskFormerModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCa
     test_head_masking = False
     test_missing_keys = False
     zero_init_hidden_state = True
+    test_torch_exportable = True
 
     def setUp(self):
         self.model_tester = MaskFormerModelTester(self)
@@ -250,7 +251,7 @@ class MaskFormerModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCa
         pass
 
     @unittest.skip(reason="MaskFormer does not have a get_input_embeddings method")
-    def test_model_common_attributes(self):
+    def test_model_get_set_embeddings(self):
         pass
 
     @unittest.skip(reason="MaskFormer is not a generative model")
@@ -298,7 +299,8 @@ class MaskFormerModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCa
             inputs_dict["output_attentions"] = True
             inputs_dict["output_hidden_states"] = False
             config.return_dict = True
-            model = model_class(config)
+            model = model_class._from_config(config, attn_implementation="eager")
+            config = model.config
             model.to(torch_device)
             model.eval()
             with torch.no_grad():
@@ -444,6 +446,37 @@ class MaskFormerModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCa
                     continue
                 recursive_check(model_batched_output[key], model_row_output[key], model_name, key)
 
+    @require_timm
+    def test_backbone_selection(self):
+        config, inputs = self.model_tester.prepare_config_and_inputs_for_common()
+
+        config.backbone_config = None
+        config.backbone_kwargs = {"out_indices": [1, 2, 3]}
+        config.use_pretrained_backbone = True
+
+        # Load a timm backbone
+        # We can't load transformer checkpoint with timm backbone, as we can't specify features_only and out_indices
+        config.backbone = "resnet18"
+        config.use_timm_backbone = True
+
+        for model_class in self.all_model_classes:
+            model = model_class(config).to(torch_device).eval()
+            if model.__class__.__name__ == "MaskFormerModel":
+                self.assertEqual(model.pixel_level_module.encoder.out_indices, [1, 2, 3])
+            elif model.__class__.__name__ == "MaskFormerForUniversalSegmentation":
+                self.assertEqual(model.model.pixel_level_module.encoder.out_indices, [1, 2, 3])
+
+        # Load a HF backbone
+        config.backbone = "microsoft/resnet-18"
+        config.use_timm_backbone = False
+
+        for model_class in self.all_model_classes:
+            model = model_class(config).to(torch_device).eval()
+            if model.__class__.__name__ == "MaskFormerModel":
+                self.assertEqual(model.pixel_level_module.encoder.out_indices, [1, 2, 3])
+            elif model.__class__.__name__ == "MaskFormerForUniversalSegmentation":
+                self.assertEqual(model.model.pixel_level_module.encoder.out_indices, [1, 2, 3])
+
 
 TOLERANCE = 1e-4
 
@@ -535,7 +568,7 @@ class MaskFormerModelIntegrationTest(unittest.TestCase):
             [-1.5795398, -1.9269832, -2.093942],
         ]
         expected_slice = torch.tensor(expected_slice).to(torch_device)
-        self.assertTrue(torch.allclose(masks_queries_logits[0, 0, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(masks_queries_logits[0, 0, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE)
         # class_queries_logits
         class_queries_logits = outputs.class_queries_logits
         self.assertEqual(
@@ -548,7 +581,9 @@ class MaskFormerModelIntegrationTest(unittest.TestCase):
                 [1.0766e-04, -7.7630e00, -5.1263e00],
             ]
         ).to(torch_device)
-        self.assertTrue(torch.allclose(outputs.class_queries_logits[0, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(
+            outputs.class_queries_logits[0, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE
+        )
 
     def test_inference_instance_segmentation_head_resnet_backbone(self):
         model = (
@@ -575,7 +610,7 @@ class MaskFormerModelIntegrationTest(unittest.TestCase):
         )
         expected_slice = [[-0.9046, -2.6366, -4.6062], [-3.4179, -5.7890, -8.8057], [-4.9179, -7.6560, -10.7711]]
         expected_slice = torch.tensor(expected_slice).to(torch_device)
-        self.assertTrue(torch.allclose(masks_queries_logits[0, 0, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(masks_queries_logits[0, 0, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE)
         # class_queries_logits
         class_queries_logits = outputs.class_queries_logits
         self.assertEqual(
@@ -584,7 +619,9 @@ class MaskFormerModelIntegrationTest(unittest.TestCase):
         expected_slice = torch.tensor(
             [[4.7188, -3.2585, -2.8857], [6.6871, -2.9181, -1.2487], [7.2449, -2.2764, -2.1874]]
         ).to(torch_device)
-        self.assertTrue(torch.allclose(outputs.class_queries_logits[0, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(
+            outputs.class_queries_logits[0, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE
+        )
 
     @require_torch_accelerator
     @require_torch_fp16

@@ -14,7 +14,8 @@
 # limitations under the License.
 
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from collections.abc import Iterable
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -29,7 +30,7 @@ from ...image_utils import (
     get_image_size,
     infer_channel_dimension_format,
     is_scaled_image,
-    is_valid_image,
+    make_nested_list_of_images,
     to_numpy_array,
     valid_images,
     validate_preprocess_arguments,
@@ -75,38 +76,6 @@ def get_resize_output_image_size(image, size, input_data_format) -> Tuple[int, i
     height = max(height, min_len)
     width = max(width, min_len)
     return height, width
-
-
-def make_list_of_images(images: ImageInput) -> List[List[np.ndarray]]:
-    """
-    Convert a single image or a list of images to a list of numpy arrays.
-
-    Args:
-        images (`ImageInput`):
-            A single image or a list of images.
-
-    Returns:
-        A list of numpy arrays.
-    """
-    # If it's a single image, convert it to a list of lists
-    if is_valid_image(images):
-        images = [[images]]
-    # If it's a list of images, it's a single batch, so convert it to a list of lists
-    elif isinstance(images, (list, tuple)) and len(images) > 0 and is_valid_image(images[0]):
-        images = [images]
-    # If it's a list of batches, it's already in the right format
-    elif (
-        isinstance(images, (list, tuple))
-        and len(images) > 0
-        and isinstance(images[0], (list, tuple))
-        and is_valid_image(images[0][0])
-    ):
-        pass
-    else:
-        raise ValueError(
-            "Invalid input type. Must be a single image, a list of images, or a list of batches of images."
-        )
-    return images
 
 
 # Copied from transformers.models.detr.image_processing_detr.max_across_indices
@@ -213,16 +182,16 @@ class Idefics2ImageProcessor(BaseImageProcessor):
             sample in the batch, such that the returned tensor is of shape (batch_size, max_num_images, num_channels, max_height, max_width).
         do_image_splitting (`bool`, *optional*, defaults to `False`):
             Whether to split the image into a sequence 4 equal sub-images concatenated with the original image. That
-            strategy was first introduced in https://arxiv.org/abs/2311.06607.
+            strategy was first introduced in https://huggingface.co/papers/2311.06607.
     """
 
-    model_input_names = ["pixel_values"]
+    model_input_names = ["pixel_values", "pixel_attention_mask"]
 
     def __init__(
         self,
         do_convert_rgb: bool = True,
         do_resize: bool = True,
-        size: Dict[str, int] = None,
+        size: Optional[Dict[str, int]] = None,
         resample: PILImageResampling = PILImageResampling.BILINEAR,
         do_rescale: bool = True,
         rescale_factor: float = 1 / 255,
@@ -471,7 +440,7 @@ class Idefics2ImageProcessor(BaseImageProcessor):
                 Whether or not to pad the images to the largest height and width in the batch.
             do_image_splitting (`bool`, *optional*, defaults to `self.do_image_splitting`):
                 Whether to split the image into a sequence 4 equal sub-images concatenated with the original image. That
-                strategy was first introduced in https://arxiv.org/abs/2311.06607.
+                strategy was first introduced in https://huggingface.co/papers/2311.06607.
             return_tensors (`str` or `TensorType`, *optional*):
                 The type of tensors to return. Can be one of:
                 - Unset: Return a list of `np.ndarray`.
@@ -503,7 +472,7 @@ class Idefics2ImageProcessor(BaseImageProcessor):
         do_pad = do_pad if do_pad is not None else self.do_pad
         do_image_splitting = do_image_splitting if do_image_splitting is not None else self.do_image_splitting
 
-        images_list = make_list_of_images(images)
+        images_list = make_nested_list_of_images(images)
 
         if not valid_images(images_list[0]):
             raise ValueError(
@@ -528,7 +497,7 @@ class Idefics2ImageProcessor(BaseImageProcessor):
         # All transformations expect numpy arrays.
         images_list = [[to_numpy_array(image) for image in images] for images in images_list]
 
-        if is_scaled_image(images_list[0][0]) and do_rescale:
+        if do_rescale and is_scaled_image(images_list[0][0]):
             logger.warning_once(
                 "It looks like you are trying to rescale already rescaled images. If the input"
                 " images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again."
@@ -594,3 +563,6 @@ class Idefics2ImageProcessor(BaseImageProcessor):
             data["pixel_attention_mask"] = np.array(pixel_attention_mask) if do_pad else pixel_attention_mask
 
         return BatchFeature(data=data, tensor_type=return_tensors)
+
+
+__all__ = ["Idefics2ImageProcessor"]

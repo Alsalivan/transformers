@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization class for model DeBERTa."""
+"""Tokenization class for model DeBERTa."""
 
 import os
 import unicodedata
@@ -22,6 +22,7 @@ import sentencepiece as sp
 
 from ...tokenization_utils import AddedToken, PreTrainedTokenizer
 from ...utils import logging
+from ...utils.import_utils import requires
 
 
 logger = logging.get_logger(__name__)
@@ -30,6 +31,7 @@ logger = logging.get_logger(__name__)
 VOCAB_FILES_NAMES = {"vocab_file": "spm.model"}
 
 
+@requires(backends=("sentencepiece",))
 class DebertaV2Tokenizer(PreTrainedTokenizer):
     r"""
     Constructs a DeBERTa-v2 tokenizer. Based on [SentencePiece](https://github.com/google/sentencepiece).
@@ -205,33 +207,6 @@ class DebertaV2Tokenizer(PreTrainedTokenizer):
         if token_ids_1 is not None:
             return [1] + ([0] * len(token_ids_0)) + [1] + ([0] * len(token_ids_1)) + [1]
         return [1] + ([0] * len(token_ids_0)) + [1]
-
-    def create_token_type_ids_from_sequences(self, token_ids_0, token_ids_1=None):
-        """
-        Create a mask from the two sequences passed to be used in a sequence-pair classification task. A DeBERTa
-        sequence pair mask has the following format:
-
-        ```
-        0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1
-        | first sequence    | second sequence |
-        ```
-
-        If `token_ids_1` is `None`, this method only returns the first portion of the mask (0s).
-
-        Args:
-            token_ids_0 (`List[int]`):
-                List of IDs.
-            token_ids_1 (`List[int]`, *optional*):
-                Optional second list of IDs for sequence pairs.
-
-        Returns:
-            `List[int]`: List of [token type IDs](../glossary#token-type-ids) according to the given sequence(s).
-        """
-        sep = [self.sep_token_id]
-        cls = [self.cls_token_id]
-        if token_ids_1 is None:
-            return len(cls + token_ids_0 + sep) * [0]
-        return len(cls + token_ids_0 + sep) * [0] + len(token_ids_1 + sep) * [1]
 
     def prepare_for_tokenization(self, text, is_split_into_words=False, **kwargs):
         add_prefix_space = kwargs.pop("add_prefix_space", False)
@@ -462,7 +437,7 @@ class SPMTokenizer:
 
         return ["".join(x) for x in output]
 
-    def save_pretrained(self, path: str, filename_prefix: str = None):
+    def save_pretrained(self, path: str, filename_prefix: Optional[str] = None):
         filename = VOCAB_FILES_NAMES[list(VOCAB_FILES_NAMES.keys())[0]]
         if filename_prefix is not None:
             filename = filename_prefix + "-" + filename
@@ -518,4 +493,7 @@ def convert_to_unicode(text):
     elif isinstance(text, bytes):
         return text.decode("utf-8", "ignore")
     else:
-        raise ValueError(f"Unsupported string type: {type(text)}")
+        raise TypeError(f"Unsupported string type: {type(text)}")
+
+
+__all__ = ["DebertaV2Tokenizer"]

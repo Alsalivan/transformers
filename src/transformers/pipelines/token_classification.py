@@ -1,6 +1,6 @@
 import types
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, overload
 
 import numpy as np
 
@@ -19,6 +19,8 @@ if is_tf_available():
 
     from ..models.auto.modeling_tf_auto import TF_MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES
 if is_torch_available():
+    import torch
+
     from ..models.auto.modeling_auto import MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING_NAMES
 
 
@@ -215,7 +217,15 @@ class TokenClassificationPipeline(ChunkPipeline):
                     )
         return preprocess_params, {}, postprocess_params
 
-    def __call__(self, inputs: Union[str, List[str]], **kwargs):
+    @overload
+    def __call__(self, inputs: str, **kwargs: Any) -> List[Dict[str, str]]: ...
+
+    @overload
+    def __call__(self, inputs: List[str], **kwargs: Any) -> List[List[Dict[str, str]]]: ...
+
+    def __call__(
+        self, inputs: Union[str, List[str]], **kwargs: Any
+    ) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
         """
         Classify each token of the text(s) given as inputs.
 
@@ -299,7 +309,11 @@ class TokenClassificationPipeline(ChunkPipeline):
             ignore_labels = ["O"]
         all_entities = []
         for model_outputs in all_outputs:
-            logits = model_outputs["logits"][0].numpy()
+            if self.framework == "pt" and model_outputs["logits"][0].dtype in (torch.bfloat16, torch.float16):
+                logits = model_outputs["logits"][0].to(torch.float32).numpy()
+            else:
+                logits = model_outputs["logits"][0].numpy()
+
             sentence = all_outputs[0]["sentence"]
             input_ids = model_outputs["input_ids"][0]
             offset_mapping = (

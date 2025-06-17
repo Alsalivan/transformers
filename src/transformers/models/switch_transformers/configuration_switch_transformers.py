@@ -12,7 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Switch Transformers model configuration"""
+"""Switch Transformers model configuration"""
+
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
 
@@ -62,7 +63,7 @@ class SwitchTransformersConfig(PretrainedConfig):
             Amount of noise to add to the router.
         router_dtype (`str`, *optional*, default to `"float32"`):
             The `dtype` used for the routers. It is preferable to keep the `dtype` to `"float32"` as specified in the
-            *selective precision* discussion in [the paper](https://arxiv.org/abs/2101.03961).
+            *selective precision* discussion in [the paper](https://huggingface.co/papers/2101.03961).
         router_ignore_padding_tokens (`bool`, *optional*, defaults to `False`):
             Whether to ignore padding tokens when routing.
         relative_attention_num_buckets (`int`, *optional*, defaults to 32):
@@ -179,3 +180,6 @@ class SwitchTransformersConfig(PretrainedConfig):
             is_encoder_decoder=is_encoder_decoder,
             **kwargs,
         )
+
+
+__all__ = ["SwitchTransformersConfig"]

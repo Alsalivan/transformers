@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TF 2.0 Cvt model."""
-
+"""TF 2.0 Cvt model."""
 
 from __future__ import annotations
 
@@ -66,8 +65,8 @@ class TFBaseModelOutputWithCLSToken(ModelOutput):
             the initial embedding outputs.
     """
 
-    last_hidden_state: tf.Tensor = None
-    cls_token_value: tf.Tensor = None
+    last_hidden_state: Optional[tf.Tensor] = None
+    cls_token_value: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
 
 
@@ -1092,3 +1091,6 @@ class TFCvtForImageClassification(TFCvtPreTrainedModel, TFSequenceClassification
             if hasattr(self.classifier, "name"):
                 with tf.name_scope(self.classifier.name):
                     self.classifier.build([None, None, self.config.embed_dim[-1]])
+
+
+__all__ = ["TFCvtForImageClassification", "TFCvtModel", "TFCvtPreTrainedModel"]

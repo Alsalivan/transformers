@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, overload
 
 import numpy as np
 
@@ -21,10 +21,6 @@ if is_torch_available():
 
 
 logger = logging.get_logger(__name__)
-
-
-Prediction = Dict[str, Any]
-Predictions = List[Prediction]
 
 
 @add_end_docstrings(build_pipeline_init_args(has_image_processor=True))
@@ -94,12 +90,20 @@ class ImageSegmentationPipeline(Pipeline):
 
         return preprocess_kwargs, {}, postprocess_kwargs
 
-    def __call__(self, images, **kwargs) -> Union[Predictions, List[Prediction]]:
+    @overload
+    def __call__(self, inputs: Union[str, "Image.Image"], **kwargs: Any) -> List[Dict[str, Any]]: ...
+
+    @overload
+    def __call__(self, inputs: Union[List[str], List["Image.Image"]], **kwargs: Any) -> List[List[Dict[str, Any]]]: ...
+
+    def __call__(
+        self, inputs: Union[str, "Image.Image", List[str], List["Image.Image"]], **kwargs: Any
+    ) -> Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]]:
         """
         Perform segmentation (detect masks & classes) in the image(s) passed as inputs.
 
         Args:
-            images (`str`, `List[str]`, `PIL.Image` or `List[PIL.Image]`):
+            inputs (`str`, `List[str]`, `PIL.Image` or `List[PIL.Image]`):
                 The pipeline handles three types of images:
 
                 - A string containing an HTTP(S) link pointing to an image
@@ -123,9 +127,8 @@ class ImageSegmentationPipeline(Pipeline):
                 the call may block forever.
 
         Return:
-            A dictionary or a list of dictionaries containing the result. If the input is a single image, will return a
-            list of dictionaries, if the input is a list of several images, will return a list of list of dictionaries
-            corresponding to each image.
+            If the input is a single image, will return a list of dictionaries, if the input is a list of several images,
+            will return a list of list of dictionaries corresponding to each image.
 
             The dictionaries contain the mask, label and score (where applicable) of each detected object and contains
             the following keys:
@@ -136,7 +139,12 @@ class ImageSegmentationPipeline(Pipeline):
             - **score** (*optional* `float`) -- Optionally, when the model is capable of estimating a confidence of the
               "object" described by the label and the mask.
         """
-        return super().__call__(images, **kwargs)
+        # After deprecation of this is completed, remove the default `None` value for `images`
+        if "images" in kwargs:
+            inputs = kwargs.pop("images")
+        if inputs is None:
+            raise ValueError("Cannot call the image-classification pipeline without an inputs argument!")
+        return super().__call__(inputs, **kwargs)
 
     def preprocess(self, image, subtask=None, timeout=None):
         image = load_image(image, timeout=timeout)
@@ -147,6 +155,8 @@ class ImageSegmentationPipeline(Pipeline):
             else:
                 kwargs = {"task_inputs": [subtask]}
             inputs = self.image_processor(images=[image], return_tensors="pt", **kwargs)
+            if self.framework == "pt":
+                inputs = inputs.to(self.torch_dtype)
             inputs["task_inputs"] = self.tokenizer(
                 inputs["task_inputs"],
                 padding="max_length",
@@ -155,6 +165,8 @@ class ImageSegmentationPipeline(Pipeline):
             )["input_ids"]
         else:
             inputs = self.image_processor(images=[image], return_tensors="pt")
+            if self.framework == "pt":
+                inputs = inputs.to(self.torch_dtype)
         inputs["target_size"] = target_size
         return inputs
 

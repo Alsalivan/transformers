@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization class for model BertGeneration."""
-
+"""Tokenization class for model BertGeneration."""
 
 import os
 from shutil import copyfile
@@ -23,6 +22,7 @@ import sentencepiece as spm
 
 from ...tokenization_utils import PreTrainedTokenizer
 from ...utils import logging
+from ...utils.import_utils import requires
 
 
 logger = logging.get_logger(__name__)
@@ -30,6 +30,7 @@ logger = logging.get_logger(__name__)
 VOCAB_FILES_NAMES = {"vocab_file": "spiece.model"}
 
 
+@requires(backends=("sentencepiece",))
 class BertGenerationTokenizer(PreTrainedTokenizer):
     """
     Construct a BertGeneration tokenizer. Based on [SentencePiece](https://github.com/google/sentencepiece).
@@ -171,3 +172,6 @@ class BertGenerationTokenizer(PreTrainedTokenizer):
                 fi.write(content_spiece_model)
 
         return (out_vocab_file,)
+
+
+__all__ = ["BertGenerationTokenizer"]

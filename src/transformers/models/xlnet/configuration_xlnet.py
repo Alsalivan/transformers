@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" XLNet configuration"""
+"""XLNet configuration"""
 
 import warnings
 
@@ -235,3 +235,6 @@ class XLNetConfig(PretrainedConfig):
         raise NotImplementedError(
             f"The model {self.model_type} is one of the few models that has no sequence length limit."
         )
+
+
+__all__ = ["XLNetConfig"]

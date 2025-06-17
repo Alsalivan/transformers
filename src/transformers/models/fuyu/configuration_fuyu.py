@@ -12,11 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Fuyu model configuration"""
+"""Fuyu model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
-from ..auto import CONFIG_MAPPING
+from ..auto import CONFIG_MAPPING, AutoConfig
 
 
 logger = logging.get_logger(__name__)
@@ -89,6 +89,8 @@ class FuyuConfig(PretrainedConfig):
             The id of the *beginning-of-sequence* token.
         eos_token_id (`Union[int, List[int]]`, *optional*, defaults to 2):
             The id of the *end-of-sequence* token. Optionally, use a list to set multiple *end-of-sequence* tokens.
+        image_token_id (`int`, *optional*, defaults to 71011):
+            The id of the image placeholder token.
         text_config (`dict`, *optional*):
             Dictionary of configuration options used to initialize the `language``[`Aut`].
 
@@ -100,6 +102,7 @@ class FuyuConfig(PretrainedConfig):
     ```"""
 
     model_type = "fuyu"
+    sub_configs = {"text_config": AutoConfig}
     keys_to_ignore_at_inference = ["past_key_values"]
 
     def __init__(
@@ -127,6 +130,7 @@ class FuyuConfig(PretrainedConfig):
         pad_token_id=None,
         bos_token_id=1,
         eos_token_id=2,
+        image_token_id=71011,
         text_config=None,
         **kwargs,
     ):
@@ -157,7 +161,7 @@ class FuyuConfig(PretrainedConfig):
         text_model_type = text_config["model_type"] if "model_type" in text_config else "persimmon"
         self.text_config = CONFIG_MAPPING[text_model_type](**text_config)
 
-        self.vocab_size = vocab_size
+        self._vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.image_size = image_size
         self.patch_size = patch_size
@@ -176,6 +180,7 @@ class FuyuConfig(PretrainedConfig):
         self.hidden_dropout = hidden_dropout
         self.attention_dropout = attention_dropout
         self.partial_rotary_factor = partial_rotary_factor
+        self.image_token_id = image_token_id
         self._rope_scaling_validation()
 
         super().__init__(
@@ -186,7 +191,6 @@ class FuyuConfig(PretrainedConfig):
             **kwargs,
         )
 
-    # Copied from transformers.models.llama.configuration_llama.LlamaConfig._rope_scaling_validation
     def _rope_scaling_validation(self):
         """
         Validate the `rope_scaling` configuration.
@@ -196,7 +200,7 @@ class FuyuConfig(PretrainedConfig):
 
         if not isinstance(self.rope_scaling, dict) or len(self.rope_scaling) != 2:
             raise ValueError(
-                "`rope_scaling` must be a dictionary with two fields, `type` and `factor`, " f"got {self.rope_scaling}"
+                f"`rope_scaling` must be a dictionary with two fields, `type` and `factor`, got {self.rope_scaling}"
             )
         rope_scaling_type = self.rope_scaling.get("type", None)
         rope_scaling_factor = self.rope_scaling.get("factor", None)
@@ -206,3 +210,6 @@ class FuyuConfig(PretrainedConfig):
             )
         if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
             raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+
+
+__all__ = ["FuyuConfig"]

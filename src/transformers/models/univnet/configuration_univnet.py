@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" UnivNetModel model configuration"""
+"""UnivNetModel model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -120,3 +120,6 @@ class UnivNetConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.leaky_relu_slope = leaky_relu_slope
         super().__init__(**kwargs)
+
+
+__all__ = ["UnivNetConfig"]

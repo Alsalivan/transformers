@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TrajectoryTransformer model configuration"""
+"""TrajectoryTransformer model configuration"""
 
 from ....configuration_utils import PretrainedConfig
 from ....utils import logging
@@ -150,3 +150,6 @@ class TrajectoryTransformerConfig(PretrainedConfig):
         self.kaiming_initializer_range = kaiming_initializer_range
         self.use_cache = use_cache
         super().__init__(pad_token_id=pad_token_id, bos_token_id=bos_token_id, eos_token_id=eos_token_id, **kwargs)
+
+
+__all__ = ["TrajectoryTransformerConfig"]

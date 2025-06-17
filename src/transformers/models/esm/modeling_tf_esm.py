@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch ESM model."""
-
+"""PyTorch ESM model."""
 
 from __future__ import annotations
 
@@ -875,7 +874,7 @@ class TFEsmMainLayer(keras.layers.Layer):
 
     The model can behave as an encoder (with only self-attention) as well as a decoder, in which case a layer of
     cross-attention is added between the self-attention layers, following the architecture described in [Attention is
-    all you need](https://arxiv.org/abs/1706.03762) by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit,
+    all you need](https://huggingface.co/papers/1706.03762) by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit,
     Llion Jones, Aidan N. Gomez, Lukasz Kaiser and Illia Polosukhin.
 
     To behave as an decoder the model needs to be initialized with the `is_decoder` argument of the configuration set
@@ -1233,7 +1232,7 @@ class TFEsmForMaskedLM(TFEsmPreTrainedModel, TFMaskedLanguageModelingLoss):
             Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
             config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are ignored (masked), the
             loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
-        kwargs (`Dict[str, any]`, optional, defaults to *{}*):
+        kwargs (`Dict[str, any]`, *optional*, defaults to `{}`):
             Used to hide legacy arguments that have been deprecated.
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
@@ -1565,3 +1564,12 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     mask = tf.cast(input_ids != padding_idx, tf.int64)
     incremental_indices = (tf.cumsum(mask, axis=1) + past_key_values_length) * mask
     return incremental_indices + padding_idx
+
+
+__all__ = [
+    "TFEsmForMaskedLM",
+    "TFEsmForSequenceClassification",
+    "TFEsmForTokenClassification",
+    "TFEsmModel",
+    "TFEsmPreTrainedModel",
+]

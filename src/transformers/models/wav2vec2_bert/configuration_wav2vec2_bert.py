@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Wav2Vec2Bert model configuration"""
-
+"""Wav2Vec2Bert model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -64,7 +63,7 @@ class Wav2Vec2BertConfig(PretrainedConfig):
         final_dropout (`float`, *optional*, defaults to 0.1):
             The dropout probability for the final projection layer of [`Wav2Vec2BertForCTC`].
         layerdrop (`float`, *optional*, defaults to 0.1):
-            The LayerDrop probability. See the [LayerDrop paper](see https://arxiv.org/abs/1909.11556) for more
+            The LayerDrop probability. See the [LayerDrop paper](see https://huggingface.co/papers/1909.11556) for more
             details.
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
@@ -73,11 +72,11 @@ class Wav2Vec2BertConfig(PretrainedConfig):
         apply_spec_augment (`bool`, *optional*, defaults to `True`):
             Whether to apply *SpecAugment* data augmentation to the outputs of the feature encoder. For reference see
             [SpecAugment: A Simple Data Augmentation Method for Automatic Speech
-            Recognition](https://arxiv.org/abs/1904.08779).
+            Recognition](https://huggingface.co/papers/1904.08779).
         mask_time_prob (`float`, *optional*, defaults to 0.05):
             Percentage (between 0 and 1) of all feature vectors along the time axis which will be masked. The masking
-            procecure generates `mask_time_prob*len(time_axis)/mask_time_length ``independent masks over the axis. If
-            reasoning from the propability of each feature vector to be chosen as the start of the vector span to be
+            procedure generates `mask_time_prob*len(time_axis)/mask_time_length ``independent masks over the axis. If
+            reasoning from the probability of each feature vector to be chosen as the start of the vector span to be
             masked, *mask_time_prob* should be `prob_vector_start*mask_time_length`. Note that overlap may decrease the
             actual percentage of masked vectors. This is only relevant if `apply_spec_augment is True`.
         mask_time_length (`int`, *optional*, defaults to 10):
@@ -88,8 +87,8 @@ class Wav2Vec2BertConfig(PretrainedConfig):
             mask_time_min_masks`.
         mask_feature_prob (`float`, *optional*, defaults to 0.0):
             Percentage (between 0 and 1) of all feature vectors along the feature axis which will be masked. The
-            masking procecure generates `mask_feature_prob*len(feature_axis)/mask_time_length` independent masks over
-            the axis. If reasoning from the propability of each feature vector to be chosen as the start of the vector
+            masking procedure generates `mask_feature_prob*len(feature_axis)/mask_time_length` independent masks over
+            the axis. If reasoning from the probability of each feature vector to be chosen as the start of the vector
             span to be masked, *mask_feature_prob* should be `prob_vector_start*mask_feature_length`. Note that overlap
             may decrease the actual percentage of masked vectors. This is only relevant if `apply_spec_augment is
             True`.
@@ -149,7 +148,7 @@ class Wav2Vec2BertConfig(PretrainedConfig):
                 - `rotary`, for rotary position embeddings.
                 - `relative`, for relative position embeddings.
                 - `relative_key`, for relative position embeddings as defined by Shaw in [Self-Attention
-            with Relative Position Representations (Shaw et al.)](https://arxiv.org/abs/1803.02155).
+            with Relative Position Representations (Shaw et al.)](https://huggingface.co/papers/1803.02155).
             If left to `None`, no relative position embeddings is applied.
         rotary_embedding_base (`int`, *optional*, defaults to 10000):
             If `"rotary"` position embeddings are used, defines the size of the embedding base.
@@ -270,7 +269,7 @@ class Wav2Vec2BertConfig(PretrainedConfig):
         self.conv_depthwise_kernel_size = conv_depthwise_kernel_size
         self.conformer_conv_dropout = conformer_conv_dropout
 
-        # fine-tuning config parameters for SpecAugment: https://arxiv.org/abs/1904.08779
+        # fine-tuning config parameters for SpecAugment: https://huggingface.co/papers/1904.08779
         self.apply_spec_augment = apply_spec_augment
         self.mask_time_prob = mask_time_prob
         self.mask_time_length = mask_time_length
@@ -309,3 +308,6 @@ class Wav2Vec2BertConfig(PretrainedConfig):
         if self.add_adapter:
             ratio = ratio * (self.adapter_stride**self.num_adapter_layers)
         return ratio
+
+
+__all__ = ["Wav2Vec2BertConfig"]

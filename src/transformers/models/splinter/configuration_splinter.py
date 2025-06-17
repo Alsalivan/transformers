@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Splinter model configuration"""
+"""Splinter model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -118,3 +118,6 @@ class SplinterConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.use_cache = use_cache
         self.question_token_id = question_token_id
+
+
+__all__ = ["SplinterConfig"]

@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" RetriBERT model configuration"""
+"""RetriBERT model configuration"""
 
 from ....configuration_utils import PretrainedConfig
 from ....utils import logging
@@ -103,3 +103,6 @@ class RetriBertConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.share_encoders = share_encoders
         self.projection_dim = projection_dim
+
+
+__all__ = ["RetriBertConfig"]

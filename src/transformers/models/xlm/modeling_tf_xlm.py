@@ -13,9 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
- TF 2.0 XLM model.
+TF 2.0 XLM model.
 """
-
 
 from __future__ import annotations
 
@@ -600,7 +599,7 @@ class TFXLMWithLMHeadModelOutput(ModelOutput):
             heads.
     """
 
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
 
@@ -1344,3 +1343,15 @@ class TFXLMForQuestionAnsweringSimple(TFXLMPreTrainedModel, TFQuestionAnsweringL
         if getattr(self, "qa_outputs", None) is not None:
             with tf.name_scope(self.qa_outputs.name):
                 self.qa_outputs.build([None, None, self.config.hidden_size])
+
+
+__all__ = [
+    "TFXLMForMultipleChoice",
+    "TFXLMForQuestionAnsweringSimple",
+    "TFXLMForSequenceClassification",
+    "TFXLMForTokenClassification",
+    "TFXLMMainLayer",
+    "TFXLMModel",
+    "TFXLMPreTrainedModel",
+    "TFXLMWithLMHeadModel",
+]

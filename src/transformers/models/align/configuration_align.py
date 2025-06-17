@@ -12,10 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" ALIGN model configuration"""
+"""ALIGN model configuration"""
 
-import os
-from typing import TYPE_CHECKING, List, Union
+from typing import TYPE_CHECKING, List
 
 
 if TYPE_CHECKING:
@@ -72,9 +71,9 @@ class AlignTextConfig(PretrainedConfig):
         position_embedding_type (`str`, *optional*, defaults to `"absolute"`):
             Type of position embedding. Choose one of `"absolute"`, `"relative_key"`, `"relative_key_query"`. For
             positional embeddings use `"absolute"`. For more information on `"relative_key"`, please refer to
-            [Self-Attention with Relative Position Representations (Shaw et al.)](https://arxiv.org/abs/1803.02155).
+            [Self-Attention with Relative Position Representations (Shaw et al.)](https://huggingface.co/papers/1803.02155).
             For more information on `"relative_key_query"`, please refer to *Method 4* in [Improve Transformer Models
-            with Better Relative Position Embeddings (Huang et al.)](https://arxiv.org/abs/2009.13658).
+            with Better Relative Position Embeddings (Huang et al.)](https://huggingface.co/papers/2009.13658).
         use_cache (`bool`, *optional*, defaults to `True`):
             Whether or not the model should return the last key/values attentions (not used by all models). Only
             relevant if `config.is_decoder=True`.
@@ -95,6 +94,7 @@ class AlignTextConfig(PretrainedConfig):
     ```"""
 
     model_type = "align_text_model"
+    base_config_key = "text_config"
 
     def __init__(
         self,
@@ -132,24 +132,6 @@ class AlignTextConfig(PretrainedConfig):
         self.position_embedding_type = position_embedding_type
         self.use_cache = use_cache
         self.pad_token_id = pad_token_id
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs) -> "PretrainedConfig":
-        cls._set_token_in_kwargs(kwargs)
-
-        config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
-
-        # get the text config dict if we are loading from AlignConfig
-        if config_dict.get("model_type") == "align":
-            config_dict = config_dict["text_config"]
-
-        if "model_type" in config_dict and hasattr(cls, "model_type") and config_dict["model_type"] != cls.model_type:
-            logger.warning(
-                f"You are using a model of type {config_dict['model_type']} to instantiate a model of type "
-                f"{cls.model_type}. This is not supported for all configurations of models and can yield errors."
-            )
-
-        return cls.from_dict(config_dict, **kwargs)
 
 
 class AlignVisionConfig(PretrainedConfig):
@@ -193,7 +175,7 @@ class AlignVisionConfig(PretrainedConfig):
         hidden_act (`str` or `function`, *optional*, defaults to `"silu"`):
             The non-linear activation function (function or string) in each block. If string, `"gelu"`, `"relu"`,
             `"selu", `"gelu_new"`, `"silu"` and `"mish"` are supported.
-        hiddem_dim (`int`, *optional*, defaults to 1280):
+        hidden_dim (`int`, *optional*, defaults to 1280):
             The hidden dimension of the layer before the classification head.
         pooling_type (`str` or `function`, *optional*, defaults to `"mean"`):
             Type of final pooling to be applied before the dense classification head. Available options are [`"mean"`,
@@ -223,6 +205,7 @@ class AlignVisionConfig(PretrainedConfig):
     ```"""
 
     model_type = "align_vision_model"
+    base_config_key = "vision_config"
 
     def __init__(
         self,
@@ -272,24 +255,6 @@ class AlignVisionConfig(PretrainedConfig):
         self.drop_connect_rate = drop_connect_rate
         self.num_hidden_layers = sum(num_block_repeats) * 4
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path: Union[str, os.PathLike], **kwargs) -> "PretrainedConfig":
-        cls._set_token_in_kwargs(kwargs)
-
-        config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
-
-        # get the vision config dict if we are loading from AlignConfig
-        if config_dict.get("model_type") == "align":
-            config_dict = config_dict["vision_config"]
-
-        if "model_type" in config_dict and hasattr(cls, "model_type") and config_dict["model_type"] != cls.model_type:
-            logger.warning(
-                f"You are using a model of type {config_dict['model_type']} to instantiate a model of type "
-                f"{cls.model_type}. This is not supported for all configurations of models and can yield errors."
-            )
-
-        return cls.from_dict(config_dict, **kwargs)
-
 
 class AlignConfig(PretrainedConfig):
     r"""
@@ -307,9 +272,9 @@ class AlignConfig(PretrainedConfig):
         vision_config (`dict`, *optional*):
             Dictionary of configuration options used to initialize [`AlignVisionConfig`].
         projection_dim (`int`, *optional*, defaults to 640):
-            Dimentionality of text and vision projection layers.
+            Dimensionality of text and vision projection layers.
         temperature_init_value (`float`, *optional*, defaults to 1.0):
-            The inital value of the *temperature* paramter. Default is used as per the original ALIGN implementation.
+            The initial value of the *temperature* parameter. Default is used as per the original ALIGN implementation.
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         kwargs (*optional*):
@@ -340,6 +305,7 @@ class AlignConfig(PretrainedConfig):
     ```"""
 
     model_type = "align"
+    sub_configs = {"text_config": AlignTextConfig, "vision_config": AlignVisionConfig}
 
     def __init__(
         self,
@@ -378,3 +344,6 @@ class AlignConfig(PretrainedConfig):
         """
 
         return cls(text_config=text_config.to_dict(), vision_config=vision_config.to_dict(), **kwargs)
+
+
+__all__ = ["AlignTextConfig", "AlignVisionConfig", "AlignConfig"]

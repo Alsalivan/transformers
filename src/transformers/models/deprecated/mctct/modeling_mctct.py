@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch M-CTC-T model."""
-
+"""PyTorch M-CTC-T model."""
 
 import math
 from typing import Optional, Tuple, Union
@@ -25,6 +24,7 @@ from torch import nn
 from ....activations import ACT2FN
 from ....file_utils import add_code_sample_docstrings, add_start_docstrings, add_start_docstrings_to_model_forward
 from ....integrations.deepspeed import is_deepspeed_zero3_enabled
+from ....integrations.fsdp import is_fsdp_managed_module
 from ....modeling_attn_mask_utils import _prepare_4d_attention_mask
 from ....modeling_outputs import BaseModelOutput, CausalLMOutput
 from ....modeling_utils import (
@@ -55,7 +55,7 @@ _CTC_EXPECTED_LOSS = 1885.65
 class MCTCTConv1dSubsampler(nn.Module):
     """
     Convolutional subsampler: a stack of 1D convolution (along temporal dimension) followed by non-linear activation
-    via gated linear units (https://arxiv.org/abs/1911.08460)
+    via gated linear units (https://huggingface.co/papers/1911.08460)
     """
 
     def __init__(self, config):
@@ -467,7 +467,7 @@ class MCTCTPreTrainedModel(PreTrainedModel):
 
     def _get_feature_vector_attention_mask(self, feature_vector_length, attention_mask):
         # generate creates 3D attention mask, because of the shape of input_features
-        # convert it to 2D if thats the case
+        # convert it to 2D if that's the case
         if len(attention_mask.shape) > 2:
             attention_mask = attention_mask[:, :, -1]
 
@@ -580,17 +580,17 @@ class MCTCTEncoder(MCTCTPreTrainedModel):
                     f"but it is for {head_mask.size()[0]}."
                 )
 
-        deepspeed_zero3_is_enabled = is_deepspeed_zero3_enabled()
+        synced_gpus = is_deepspeed_zero3_enabled() or is_fsdp_managed_module(self)
         for idx, encoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
 
-            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+            # add LayerDrop (see https://huggingface.co/papers/1909.11556 for description)
             dropout_probability = torch.rand([])
 
             skip_the_layer = True if self.training and (dropout_probability < self.config.layerdrop) else False
-            if not skip_the_layer or deepspeed_zero3_is_enabled:
-                # under deepspeed zero3 all gpus must run in sync
+            if not skip_the_layer or synced_gpus:
+                # under fsdp or deepspeed zero3 all gpus must run in sync
                 if self.gradient_checkpointing and self.training:
                     layer_outputs = self._gradient_checkpointing_func(
                         encoder_layer.__call__,
@@ -733,6 +733,8 @@ class MCTCTForCTC(MCTCTPreTrainedModel):
             All labels set to `-100` are ignored (masked), the loss is only computed for labels in `[0, ...,
             config.vocab_size - 1]`.
         """
+        if labels is not None and labels.max() >= self.config.vocab_size:
+            raise ValueError(f"Label values must be <= vocab_size: {self.config.vocab_size}")
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.mctct(
@@ -750,9 +752,6 @@ class MCTCTForCTC(MCTCTPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if labels.max() >= self.config.vocab_size:
-                raise ValueError(f"Label values must be <= vocab_size: {self.config.vocab_size}")
-
             # retrieve loss input_lengths from attention_mask
             attention_mask = (
                 attention_mask
@@ -787,3 +786,6 @@ class MCTCTForCTC(MCTCTPreTrainedModel):
         return CausalLMOutput(
             loss=loss, logits=logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions
         )
+
+
+__all__ = ["MCTCTForCTC", "MCTCTModel", "MCTCTPreTrainedModel"]

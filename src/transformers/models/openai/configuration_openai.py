@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" OpenAI GPT configuration"""
+"""OpenAI GPT configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -151,3 +151,6 @@ class OpenAIGPTConfig(PretrainedConfig):
         self.summary_first_dropout = summary_first_dropout
         self.summary_proj_to_labels = summary_proj_to_labels
         super().__init__(**kwargs)
+
+
+__all__ = ["OpenAIGPTConfig"]

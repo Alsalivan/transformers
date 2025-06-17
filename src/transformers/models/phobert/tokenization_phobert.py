@@ -13,8 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Tokenization classes for PhoBERT"""
-
+"""Tokenization classes for PhoBERT"""
 
 import os
 import re
@@ -347,3 +346,6 @@ class PhobertTokenizer(PreTrainedTokenizer):
                 raise ValueError("Incorrect dictionary format, expected '<token> <cnt>'")
             word = line[:idx]
             self.encoder[word] = len(self.encoder)
+
+
+__all__ = ["PhobertTokenizer"]

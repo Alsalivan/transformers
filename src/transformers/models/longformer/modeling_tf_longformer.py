@@ -14,7 +14,6 @@
 # limitations under the License.
 """Tensorflow Longformer model."""
 
-
 from __future__ import annotations
 
 import warnings
@@ -94,7 +93,7 @@ class TFLongformerBaseModelOutput(ModelOutput):
             in the sequence.
     """
 
-    last_hidden_state: tf.Tensor = None
+    last_hidden_state: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -141,8 +140,8 @@ class TFLongformerBaseModelOutputWithPooling(ModelOutput):
             in the sequence.
     """
 
-    last_hidden_state: tf.Tensor = None
-    pooler_output: tf.Tensor = None
+    last_hidden_state: Optional[tf.Tensor] = None
+    pooler_output: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -188,7 +187,7 @@ class TFLongformerMaskedLMOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -236,8 +235,8 @@ class TFLongformerQuestionAnsweringModelOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    start_logits: tf.Tensor = None
-    end_logits: tf.Tensor = None
+    start_logits: Optional[tf.Tensor] = None
+    end_logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -283,7 +282,7 @@ class TFLongformerSequenceClassifierOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -331,7 +330,7 @@ class TFLongformerMultipleChoiceModelOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -377,7 +376,7 @@ class TFLongformerTokenClassifierOutput(ModelOutput):
     """
 
     loss: tf.Tensor | None = None
-    logits: tf.Tensor = None
+    logits: Optional[tf.Tensor] = None
     hidden_states: Tuple[tf.Tensor, ...] | None = None
     attentions: Tuple[tf.Tensor, ...] | None = None
     global_attentions: Tuple[tf.Tensor, ...] | None = None
@@ -747,12 +746,12 @@ class TFLongformerSelfAttention(keras.layers.Layer):
         self.layer_id = layer_id
         attention_window = config.attention_window[self.layer_id]
 
-        assert (
-            attention_window % 2 == 0
-        ), f"`attention_window` for layer {self.layer_id} has to be an even value. Given {attention_window}"
-        assert (
-            attention_window > 0
-        ), f"`attention_window` for layer {self.layer_id} has to be positive. Given {attention_window}"
+        assert attention_window % 2 == 0, (
+            f"`attention_window` for layer {self.layer_id} has to be an even value. Given {attention_window}"
+        )
+        assert attention_window > 0, (
+            f"`attention_window` for layer {self.layer_id} has to be positive. Given {attention_window}"
+        )
 
         self.one_sided_attn_window_size = attention_window // 2
 
@@ -2062,7 +2061,7 @@ LONGFORMER_INPUTS_DOCSTRING = r"""
             attention attends to all other tokens, and all other tokens attend to them. This is important for
             task-specific finetuning because it makes the model more flexible at representing the task. For example,
             for classification, the <s> token should be given global attention. For QA, all question tokens should also
-            have global attention. Please refer to the [Longformer paper](https://arxiv.org/abs/2004.05150) for more
+            have global attention. Please refer to the [Longformer paper](https://huggingface.co/papers/2004.05150) for more
             details. Mask values selected in `[0, 1]`:
 
             - 0 for local attention (a sliding window attention),
@@ -2111,7 +2110,7 @@ class TFLongformerModel(TFLongformerPreTrainedModel):
 
     This class copies code from [`TFRobertaModel`] and overwrites standard self-attention with longformer
     self-attention to provide the ability to process long sequences following the self-attention approach described in
-    [Longformer: the Long-Document Transformer](https://arxiv.org/abs/2004.05150) by Iz Beltagy, Matthew E. Peters, and
+    [Longformer: the Long-Document Transformer](https://huggingface.co/papers/2004.05150) by Iz Beltagy, Matthew E. Peters, and
     Arman Cohan. Longformer self-attention combines a local (sliding window) and global attention to extend to long
     documents without the O(n^2) increase in memory and compute.
 
@@ -2773,3 +2772,15 @@ class TFLongformerForTokenClassification(TFLongformerPreTrainedModel, TFTokenCla
         if getattr(self, "classifier", None) is not None:
             with tf.name_scope(self.classifier.name):
                 self.classifier.build([None, None, self.config.hidden_size])
+
+
+__all__ = [
+    "TFLongformerForMaskedLM",
+    "TFLongformerForMultipleChoice",
+    "TFLongformerForQuestionAnswering",
+    "TFLongformerForSequenceClassification",
+    "TFLongformerForTokenClassification",
+    "TFLongformerModel",
+    "TFLongformerPreTrainedModel",
+    "TFLongformerSelfAttention",
+]

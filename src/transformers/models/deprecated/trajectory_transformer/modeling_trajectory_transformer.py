@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch TrajectoryTransformer model."""
+"""PyTorch TrajectoryTransformer model."""
 
 import math
 import os
@@ -140,7 +140,7 @@ class TrajectoryTransformerOutput(ModelOutput):
     """
 
     loss: Optional[torch.FloatTensor] = None
-    logits: torch.FloatTensor = None
+    logits: Optional[torch.FloatTensor] = None
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -601,3 +601,10 @@ class TrajectoryTransformerModel(TrajectoryTransformerPreTrainedModel):
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
         )
+
+
+__all__ = [
+    "TrajectoryTransformerModel",
+    "TrajectoryTransformerPreTrainedModel",
+    "load_tf_weights_in_trajectory_transformer",
+]

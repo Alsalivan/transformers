@@ -16,10 +16,18 @@ rendered properly in your Markdown viewer.
 
 # Speech2Text2
 
+  <Tip warning={true}>
+
+  This model is in maintenance mode only, we don't accept any new PRs changing its code.
+  If you run into any issues running this model, please reinstall the last version that supported this model: v4.40.2.
+  You can do so by running the following command: `pip install -U transformers==4.40.2`.
+
+  </Tip>
+
 ## Overview
 
 The Speech2Text2 model is used together with [Wav2Vec2](wav2vec2) for Speech Translation models proposed in
-[Large-Scale Self- and Semi-Supervised Learning for Speech Translation](https://arxiv.org/abs/2104.06678) by
+[Large-Scale Self- and Semi-Supervised Learning for Speech Translation](https://huggingface.co/papers/2104.06678) by
 Changhan Wang, Anne Wu, Juan Pino, Alexei Baevski, Michael Auli, Alexis Conneau.
 
 Speech2Text2 is a *decoder-only* transformer model that can be used with any speech *encoder-only*, such as

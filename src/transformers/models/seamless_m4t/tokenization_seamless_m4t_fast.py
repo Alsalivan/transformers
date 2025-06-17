@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Fast Tokenization class for SeamlessM4T."""
+
 import os
 from shutil import copyfile
 from typing import List, Optional, Tuple, Union
@@ -149,10 +150,6 @@ class SeamlessM4TTokenizerFast(PreTrainedTokenizerFast):
         self._tgt_lang = f"__{tgt_lang}__" if "__" not in tgt_lang else tgt_lang
         self.set_src_lang_special_tokens(self._src_lang)
         self.set_tgt_lang_special_tokens(self._tgt_lang)
-
-    @property
-    def can_save_slow_tokenizer(self) -> bool:
-        return os.path.isfile(self.vocab_file) if self.vocab_file else False
 
     @property
     # Copied from transformers.models.nllb.tokenization_nllb.NllbTokenizer.src_lang
@@ -444,3 +441,6 @@ class SeamlessM4TTokenizerFast(PreTrainedTokenizerFast):
         )
 
         return output
+
+
+__all__ = ["SeamlessM4TTokenizerFast"]

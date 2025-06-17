@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" CPMAnt model configuration"""
+"""CPMAnt model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -117,3 +117,6 @@ class CpmAntConfig(PretrainedConfig):
         self.use_cache = use_cache
         self.vocab_size = vocab_size
         self.init_std = init_std
+
+
+__all__ = ["CpmAntConfig"]

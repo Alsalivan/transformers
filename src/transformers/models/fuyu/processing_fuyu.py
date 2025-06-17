@@ -15,14 +15,23 @@
 """
 Image/Text processor class for GIT
 """
+
 import re
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from ...processing_utils import ProcessorMixin
-from ...tokenization_utils_base import PaddingStrategy, TruncationStrategy
-from ...utils import TensorType, is_torch_available, logging, requires_backends
+from ...image_utils import ImageInput
+from ...processing_utils import (
+    MultiModalData,
+    ProcessingKwargs,
+    ProcessorMixin,
+    Unpack,
+    _validate_images_text_input_order,
+)
+from ...tokenization_utils_base import PreTokenizedInput, TextInput
+from ...utils import is_torch_available, logging, requires_backends
+from ...utils.import_utils import requires
 
 
 if is_torch_available():
@@ -46,6 +55,25 @@ TOKEN_BBOX_CLOSE_STRING = "<0x01>"  # </bbox>
 TOKEN_POINT_OPEN_STRING = "<0x02>"  # <point>
 TOKEN_POINT_CLOSE_STRING = "<0x03>"  # </point>
 BEGINNING_OF_ANSWER_STRING = "<0x04>"  # <boa>
+
+
+class FuyuProcessorKwargs(ProcessingKwargs, total=False):
+    _defaults = {
+        "text_kwargs": {
+            "add_special_tokens": True,
+            "padding": False,
+            "stride": 0,
+            "return_attention_mask": True,
+            "return_overflowing_tokens": False,
+            "return_special_tokens_mask": False,
+            "return_offsets_mapping": False,
+            "return_token_type_ids": False,
+            "return_length": False,
+            "verbose": True,
+            "return_mm_token_type_ids": False,
+        },
+        "images_kwargs": {},
+    }
 
 
 def full_unpacked_stream_to_tensor(
@@ -223,7 +251,7 @@ def _tokenize_prompts_with_image_and_batch(
     - pad all the sequences to this length so we can convert them into a 3D tensor.
     """
 
-    # If not tool use, tranform the coordinates while tokenizing
+    # If not tool use, transform the coordinates while tokenizing
     if scale_factors is not None:
         transformed_prompt_tokens = []
         for prompt_seq, scale_factor_seq in zip(prompts, scale_factors):
@@ -244,10 +272,10 @@ def _tokenize_prompts_with_image_and_batch(
         bos_token = tokenizer.vocab["|ENDOFTEXT|"]
     prompts_tokens = [[[bos_token] + x for x in prompt_seq] for prompt_seq in prompts_tokens]
     if add_beginning_of_answer_token:
-        boa = tokenizer.vocab[BEGINNING_OF_ANSWER_STRING]
+        beginning_of_answer = tokenizer.vocab[BEGINNING_OF_ANSWER_STRING]
         # Only add bbox open token to the last subsequence since that is what will be completed
         for token_seq in prompts_tokens:
-            token_seq[-1].append(boa)
+            token_seq[-1].append(beginning_of_answer)
 
     # Now we have a list of list of tokens which each list has a different
     # size. We want to extend this list to:
@@ -306,6 +334,7 @@ def scale_bbox_to_transformed_image(
     return [top_scaled, left_scaled, bottom_scaled, right_scaled]
 
 
+@requires(backends=("vision",))
 class FuyuProcessor(ProcessorMixin):
     r"""
     Constructs a Fuyu processor which wraps a Fuyu image processor and a Llama tokenizer into a single processor.
@@ -324,7 +353,7 @@ class FuyuProcessor(ProcessorMixin):
     image_processor_class = "FuyuImageProcessor"
     tokenizer_class = "AutoTokenizer"
 
-    def __init__(self, image_processor, tokenizer):
+    def __init__(self, image_processor, tokenizer, **kwargs):
         super().__init__(image_processor=image_processor, tokenizer=tokenizer)
         self.image_processor = image_processor
         self.tokenizer = tokenizer
@@ -332,6 +361,8 @@ class FuyuProcessor(ProcessorMixin):
         self.max_position_embeddings = 16384  # TODO Can't derive this from model files: where to set it?
         self.pad_token_id = 0
         self.dummy_image_index = -1
+        self.image_token_id = tokenizer.encode("|SPEAKER|", add_special_tokens=False)[1]
+        self.image_newline_id = tokenizer.encode("|NEWLINE|", add_special_tokens=False)[1]
 
     def _left_pad_inputs_with_attention_mask(self, model_inputs: List[Dict], return_attention_mask: bool):
         max_length_input_ids = max(entry["input_ids"].shape[1] for entry in model_inputs)
@@ -379,6 +410,11 @@ class FuyuProcessor(ProcessorMixin):
             batched_keys.append("attention_mask")
         for key in batched_keys:
             batched_inputs[key] = torch.cat(batched_inputs[key], dim=0)
+
+        # Cast images to tensor as well, if only one image passed and no padding needed
+        # NOTE: vLLM expects all processor outputs to be a tensor
+        if len(batched_inputs["image_patches"]) == 1:
+            batched_inputs["image_patches"] = torch.cat(batched_inputs["image_patches"], dim=0)
 
         return batched_inputs
 
@@ -450,39 +486,27 @@ class FuyuProcessor(ProcessorMixin):
 
     def __call__(
         self,
-        text=None,
-        images=None,
-        add_special_tokens: bool = True,
-        return_attention_mask: bool = True,
-        padding: Union[bool, str, PaddingStrategy] = False,
-        truncation: Union[bool, str, TruncationStrategy] = None,
-        max_length: Optional[int] = None,
-        stride: int = 0,
-        pad_to_multiple_of: Optional[int] = None,
-        return_overflowing_tokens: bool = False,
-        return_special_tokens_mask: bool = False,
-        return_offsets_mapping: bool = False,
-        return_token_type_ids: bool = False,
-        return_length: bool = False,
-        verbose: bool = True,
-        return_tensors: Optional[Union[str, TensorType]] = None,
-        **kwargs,
+        images: ImageInput = None,
+        text: Optional[Union[str, List[str], TextInput, PreTokenizedInput]] = None,
+        audio=None,
+        videos=None,
+        **kwargs: Unpack[FuyuProcessorKwargs],
     ) -> "FuyuBatchFeature":
         """
         Main method to prepare for the model one or several sequences(s) and image(s). This method forwards the `text`
         and `kwargs` arguments to LlamaTokenizerFast's [`~LlamaTokenizerFast.__call__`] if `text` is not `None` to
         encode the text. To prepare the image(s), this method forwards the `images` and `kwargs` arguments to
-        FuyuImageProcessor's [`~FuyuImageProcessor.__call__`] if `images` is not `None`. Please refer to the doctsring
+        FuyuImageProcessor's [`~FuyuImageProcessor.__call__`] if `images` is not `None`. Please refer to the docstring
         of the above two methods for more information.
 
         Args:
+            images (`PIL.Image.Image`, `List[PIL.Image.Image]`):
+                The image or batch of images to be prepared. Each image can be a PIL image, NumPy array or PyTorch
+                tensor. Both channels-first and channels-last formats are supported.
             text (`str`, `List[str]`):
                 The sequence or batch of sequences to be encoded. Each sequence can be a string or a list of strings
                 (pretokenized string). If the sequences are provided as list of strings (pretokenized), you must set
                 `is_split_into_words=True` (to lift the ambiguity with a batch of sequences).
-            images (`PIL.Image.Image`, `List[PIL.Image.Image]`):
-                The image or batch of images to be prepared. Each image can be a PIL image, NumPy array or PyTorch
-                tensor. Both channels-first and channels-last formats are supported.
 
         Returns:
             [`FuyuBatchEncoding`]: A [`FuyuBatchEncoding`] with the following fields:
@@ -496,31 +520,25 @@ class FuyuProcessor(ProcessorMixin):
         requires_backends(self, ["torch"])
 
         # --- Check input validity ---
-        if not return_attention_mask:
-            raise ValueError("`return_attention_mask=False` is not supported for this model.")
         if text is None and images is None:
             raise ValueError("You have to specify either text or images. Both cannot be None.")
+        # check if images and text inputs are reversed for BC
+        images, text = _validate_images_text_input_order(images, text)
+
+        output_kwargs = self._merge_kwargs(
+            FuyuProcessorKwargs,
+            tokenizer_init_kwargs=self.tokenizer.init_kwargs,
+            **kwargs,
+        )
+        return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", False)
+
+        if not output_kwargs["text_kwargs"].setdefault("return_attention_mask", True):
+            raise ValueError("`return_attention_mask=False` is not supported for this model.")
+
         if text is not None and images is None:
             logger.warning("You are processing a text with no associated image. Make sure it is intended.")
             self.current_processor = self.tokenizer
-            text_encoding = self.tokenizer(
-                text=text,
-                add_special_tokens=add_special_tokens,
-                padding=padding,
-                truncation=truncation,
-                max_length=max_length,
-                stride=stride,
-                pad_to_multiple_of=pad_to_multiple_of,
-                return_attention_mask=return_attention_mask,
-                return_overflowing_tokens=return_overflowing_tokens,
-                return_special_tokens_mask=return_special_tokens_mask,
-                return_offsets_mapping=return_offsets_mapping,
-                return_token_type_ids=return_token_type_ids,
-                return_length=return_length,
-                verbose=verbose,
-                return_tensors=return_tensors,
-                **kwargs,
-            )
+            text_encoding = self.tokenizer(text, **output_kwargs["text_kwargs"])
             return text_encoding
 
         if text is None and images is not None:
@@ -535,7 +553,8 @@ class FuyuProcessor(ProcessorMixin):
         # --- Preprocess images using self.image_processor ---
 
         # FIXME - We hard code "pt" here because the rest of the processing assumes torch tensors
-        image_encoding = self.image_processor.preprocess(images, return_tensors="pt")
+        output_kwargs["images_kwargs"]["return_tensors"] = "pt"
+        image_encoding = self.image_processor.preprocess(images, **output_kwargs["images_kwargs"])
         batch_images = image_encoding["images"]
         image_unpadded_heights = image_encoding["image_unpadded_heights"]
         image_unpadded_widths = image_encoding["image_unpadded_widths"]
@@ -545,8 +564,6 @@ class FuyuProcessor(ProcessorMixin):
 
         # --- Use self.tokenizer to get the ids of special tokens to insert into image ids ---
 
-        image_placeholder_id = self.tokenizer("|SPEAKER|", add_special_tokens=False)["input_ids"][1]
-        image_newline_id = self.tokenizer("|NEWLINE|", add_special_tokens=False)["input_ids"][1]
         tensor_batch_images = torch.stack([img[0] for img in batch_images]).unsqueeze(1)
 
         # --- Use self.image_processor again to obtain the full token ids and batch inputs ---
@@ -560,15 +577,66 @@ class FuyuProcessor(ProcessorMixin):
                 scale_factors=[scale_factor],
                 image_unpadded_heights=torch.tensor([image_unpadded_height]),
                 image_unpadded_widths=torch.tensor([image_unpadded_width]),
-                image_placeholder_id=image_placeholder_id,
-                image_newline_id=image_newline_id,
+                image_placeholder_id=self.image_token_id,
+                image_newline_id=self.image_newline_id,
                 tensor_batch_images=tensor_batch_image.unsqueeze(0),
             )
             all_encodings.append(sample_encoding)
+
         batch_encoding = self._left_pad_inputs_with_attention_mask(
-            model_inputs=all_encodings, return_attention_mask=return_attention_mask
+            model_inputs=all_encodings, return_attention_mask=True
         )
+        if return_mm_token_type_ids:
+            input_ids = batch_encoding["input_ids"]
+            mm_token_type_ids = torch.zeros_like(input_ids)
+            mm_token_type_ids[input_ids == self.image_token_id] = 1
+            mm_token_type_ids[input_ids == self.image_newline_id] = 1
+            batch_encoding["mm_token_type_ids"] = mm_token_type_ids
+
         return FuyuBatchFeature(data=batch_encoding)
+
+    def _get_num_multimodal_tokens(self, image_sizes=None, **kwargs):
+        """
+        Computes the number of placeholder tokens needed for multimodal inputs with the given sizes.
+
+        Args:
+            image_sizes (`List[List[int]]`, *optional*):
+                The input sizes formatted as (height, width) per each image.
+
+        Returns:
+            `MultiModalData`: A `MultiModalData` object holding number of tokens per each of the provided
+            input modalities, along with other useful data.
+        """
+
+        vision_data = {}
+        if image_sizes is not None:
+            size = kwargs.get("size", None) or self.image_processor.size
+            padded_height, padded_width = size["height"], size["width"]
+
+            num_image_tokens = []
+            num_image_patches = [1] * len(image_sizes)
+            for image_size in image_sizes:
+                height_scale_factor = padded_height / image_size[0]
+                width_scale_factor = padded_width / image_size[1]
+                optimal_scale_factor = min(height_scale_factor, width_scale_factor)
+
+                image_unpadded_h = min(int(image_size[0] * optimal_scale_factor), image_size[0])
+                image_unpadded_w = min(int(image_size[0] * optimal_scale_factor), image_size[0])
+
+                # We can use torch here because Fuyu processor has hard dependency on torch. NOTE: Fuyu can't do multi-image
+                # thus the below (1, 1, 1) is hardcoded. Same as when calling the processor
+                model_image_input = self.image_processor.preprocess_with_tokenizer_info(
+                    image_input=torch.zeros(1, 1, 3, padded_height, padded_width),
+                    image_present=torch.ones(1, 1, 1),
+                    image_unpadded_h=torch.tensor([[image_unpadded_h]]),
+                    image_unpadded_w=torch.tensor([[image_unpadded_w]]),
+                    image_placeholder_id=0,  # dummy ids, we can be sure `id=0` is never out-of-range
+                    image_newline_id=0,
+                    variable_sized=True,
+                )
+                num_image_tokens.append(model_image_input["image_input_ids"][0][0].shape[-1])
+            vision_data.update({"num_image_tokens": num_image_tokens, "num_image_patches": num_image_patches})
+        return MultiModalData(**vision_data)
 
     def post_process_box_coordinates(self, outputs, target_sizes=None):
         """
@@ -679,6 +747,36 @@ class FuyuProcessor(ProcessorMixin):
 
         return results
 
+    def post_process_image_text_to_text(self, generated_outputs, skip_special_tokens=True, **kwargs):
+        """
+        Post-processes the output of `FuyuForConditionalGeneration` to only return the text output.
+
+        Args:
+            generated_outputs (`torch.Tensor` or `np.ndarray`):
+                The output of the model. The output is expected to be a tensor of shape `(batch_size, sequence_length)`
+                containing the token ids of the generated sequences.
+            skip_special_tokens (`bool`, *optional*, defaults to `True`):
+                Whether or not to remove special tokens in the output. Argument passed to the tokenizer's `batch_decode` method.
+            **kwargs:
+                Additional arguments to be passed to the tokenizer's `batch_decode method`.
+
+        Returns:
+            `List[str]`: The decoded text output.
+        """
+        beginning_of_answer = self.tokenizer.convert_tokens_to_ids(BEGINNING_OF_ANSWER_STRING)
+        # get boa index for each outputted sequence tensor
+        # start all generated sequences from the beginning of the answer token, pad to have consistent length
+        unpadded_output_sequences = [
+            seq[(seq == beginning_of_answer).nonzero(as_tuple=True)[0] + 1 :] for seq in generated_outputs
+        ]
+        max_len = max(len(seq) for seq in unpadded_output_sequences)
+        # convert to torch and pad sequences
+        padded_output_sequences = torch.full((len(unpadded_output_sequences), max_len), self.pad_token_id)
+        for i, seq in enumerate(unpadded_output_sequences):
+            padded_output_sequences[i, : len(seq)] = torch.tensor(seq)
+
+        return self.batch_decode(padded_output_sequences, skip_special_tokens=skip_special_tokens, **kwargs)
+
     def batch_decode(self, *args, **kwargs):
         """
         This method forwards all its arguments to LlamaTokenizerFast's [`~PreTrainedTokenizer.batch_decode`]. Please
@@ -692,3 +790,6 @@ class FuyuProcessor(ProcessorMixin):
         the docstring of this method for more information.
         """
         return self.tokenizer.decode(*args, **kwargs)
+
+
+__all__ = ["FuyuProcessor"]

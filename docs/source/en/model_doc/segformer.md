@@ -16,9 +16,14 @@ rendered properly in your Markdown viewer.
 
 # SegFormer
 
+<div class="flex flex-wrap space-x-1">
+<img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-DE3412?style=flat&logo=pytorch&logoColor=white">
+<img alt="TensorFlow" src="https://img.shields.io/badge/TensorFlow-FF6F00?style=flat&logo=tensorflow&logoColor=white">
+</div>
+
 ## Overview
 
-The SegFormer model was proposed in [SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers](https://arxiv.org/abs/2105.15203) by Enze Xie, Wenhai Wang, Zhiding Yu, Anima Anandkumar, Jose M. Alvarez, Ping
+The SegFormer model was proposed in [SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers](https://huggingface.co/papers/2105.15203) by Enze Xie, Wenhai Wang, Zhiding Yu, Anima Anandkumar, Jose M. Alvarez, Ping
 Luo. The model consists of a hierarchical Transformer encoder and a lightweight all-MLP decode head to achieve great
 results on image segmentation benchmarks such as ADE20K and Cityscapes.
 
@@ -36,7 +41,7 @@ and efficiency than previous counterparts. For example, SegFormer-B4 achieves 50
 being 5x smaller and 2.2% better than the previous best method. Our best model, SegFormer-B5, achieves 84.0% mIoU on
 Cityscapes validation set and shows excellent zero-shot robustness on Cityscapes-C.*
 
-The figure below illustrates the architecture of SegFormer. Taken from the [original paper](https://arxiv.org/abs/2105.15203).
+The figure below illustrates the architecture of SegFormer. Taken from the [original paper](https://huggingface.co/papers/2105.15203).
 
 <img width="600" src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/segformer_architecture.png"/>
 
@@ -66,15 +71,15 @@ of the model was contributed by [sayakpaul](https://huggingface.co/sayakpaul). T
   important preprocessing step is that images and segmentation maps are randomly cropped and padded to the same size,
   such as 512x512 or 640x640, after which they are normalized.
 - One additional thing to keep in mind is that one can initialize [`SegformerImageProcessor`] with
-  `reduce_labels` set to `True` or `False`. In some datasets (like ADE20k), the 0 index is used in the annotated
+  `do_reduce_labels` set to `True` or `False`. In some datasets (like ADE20k), the 0 index is used in the annotated
   segmentation maps for background. However, ADE20k doesn't include the "background" class in its 150 labels.
-  Therefore, `reduce_labels` is used to reduce all labels by 1, and to make sure no loss is computed for the
+  Therefore, `do_reduce_labels` is used to reduce all labels by 1, and to make sure no loss is computed for the
   background class (i.e. it replaces 0 in the annotated maps by 255, which is the *ignore_index* of the loss function
   used by [`SegformerForSemanticSegmentation`]). However, other datasets use the 0 index as
-  background class and include this class as part of all labels. In that case, `reduce_labels` should be set to
+  background class and include this class as part of all labels. In that case, `do_reduce_labels` should be set to
   `False`, as loss should also be computed for the background class.
 - As most models, SegFormer comes in different sizes, the details of which can be found in the table below
-  (taken from Table 7 of the [original paper](https://arxiv.org/abs/2105.15203)).
+  (taken from Table 7 of the [original paper](https://huggingface.co/papers/2105.15203)).
 
 | **Model variant** | **Depths**    | **Hidden sizes**    | **Decoder hidden size** | **Params (M)** | **ImageNet-1k Top 1** |
 | :---------------: | ------------- | ------------------- | :---------------------: | :------------: | :-------------------: |
@@ -86,7 +91,7 @@ of the model was contributed by [sayakpaul](https://huggingface.co/sayakpaul). T
 | MiT-b5            | [3, 6, 40, 3] | [64, 128, 320, 512] | 768                     | 82.0           | 83.8                  |
 
 Note that MiT in the above table refers to the Mix Transformer encoder backbone introduced in SegFormer. For
-SegFormer's results on the segmentation datasets like ADE20k, refer to the [paper](https://arxiv.org/abs/2105.15203).
+SegFormer's results on the segmentation datasets like ADE20k, refer to the [paper](https://huggingface.co/papers/2105.15203).
 
 ## Resources
 

@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TensorFlow Hubert model."""
+"""TensorFlow Hubert model."""
 
 from __future__ import annotations
 
@@ -587,7 +587,7 @@ class TFHubertFeatureEncoder(keras.layers.Layer):
 
         if config.feat_extract_norm == "group":
             conv_layers = [TFHubertGroupNormConvLayer(config, layer_id=0, name=f"conv_layers.{0}")] + [
-                TFHubertNoLayerNormConvLayer(config, layer_id=i + 1, name=f"conv_layers.{i+1}")
+                TFHubertNoLayerNormConvLayer(config, layer_id=i + 1, name=f"conv_layers.{i + 1}")
                 for i in range(config.num_feat_extract_layers - 1)
             ]
         elif config.feat_extract_norm == "layer":
@@ -1030,7 +1030,7 @@ class TFHubertEncoder(keras.layers.Layer):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+            # add LayerDrop (see https://huggingface.co/papers/1909.11556 for description)
             dropout_probability = np.random.uniform(0, 1)
             if training and (dropout_probability < self.config.layerdrop):  # skip the layer
                 continue
@@ -1112,7 +1112,7 @@ class TFHubertEncoderStableLayerNorm(keras.layers.Layer):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+            # add LayerDrop (see https://huggingface.co/papers/1909.11556 for description)
             dropout_probability = np.random.uniform(0, 1)
             if training and (dropout_probability < self.config.layerdrop):  # skip the layer
                 continue
@@ -1208,7 +1208,7 @@ class TFHubertMainLayer(keras.layers.Layer):
     def _mask_hidden_states(self, hidden_states: tf.Tensor, mask_time_indices: tf.Tensor | None = None):
         """
         Masks extracted features along time axis and/or along feature axis according to
-        [SpecAugment](https://arxiv.org/abs/1904.08779).
+        [SpecAugment](https://huggingface.co/papers/1904.08779).
         """
         batch_size, sequence_length, hidden_size = shape_list(hidden_states)
 
@@ -1425,7 +1425,7 @@ HUBERT_INPUTS_DOCSTRING = r"""
 
 
 @add_start_docstrings(
-    "The bare TFHubert Model transformer outputing raw hidden-states without any specific head on top.",
+    "The bare TFHubert Model transformer outputting raw hidden-states without any specific head on top.",
     HUBERT_START_DOCSTRING,
 )
 class TFHubertModel(TFHubertPreTrainedModel):
@@ -1600,6 +1600,8 @@ class TFHubertForCTC(TFHubertPreTrainedModel):
 
         >>> loss = model(input_values, labels=labels).loss
         ```"""
+        if labels is not None and tf.reduce_max(labels) >= self.config.vocab_size:
+            raise ValueError(f"Label values must be <= vocab_size: {self.config.vocab_size}")
 
         outputs = self.hubert(
             input_values=input_values,
@@ -1619,9 +1621,6 @@ class TFHubertForCTC(TFHubertPreTrainedModel):
         logits = self.lm_head(hidden_states)
 
         if labels is not None:
-            if tf.reduce_max(labels) >= self.config.vocab_size:
-                raise ValueError(f"Label values must be <= vocab_size: {self.config.vocab_size}")
-
             attention_mask = (
                 attention_mask if attention_mask is not None else tf.ones_like(input_values, dtype=tf.float32)
             )
@@ -1671,3 +1670,6 @@ class TFHubertForCTC(TFHubertPreTrainedModel):
         if getattr(self, "lm_head", None) is not None:
             with tf.name_scope(self.lm_head.name):
                 self.lm_head.build([None, None, self.output_hidden_size])
+
+
+__all__ = ["TFHubertForCTC", "TFHubertModel", "TFHubertPreTrainedModel"]

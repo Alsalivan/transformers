@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Bros model configuration"""
+"""Bros model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -133,3 +133,6 @@ class BrosConfig(PretrainedConfig):
         self.dim_bbox_sinusoid_emb_1d = self.dim_bbox_sinusoid_emb_2d // self.dim_bbox
         self.dim_bbox_projection = self.hidden_size // self.num_attention_heads
         self.classifier_dropout_prob = classifier_dropout_prob
+
+
+__all__ = ["BrosConfig"]

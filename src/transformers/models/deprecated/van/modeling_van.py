@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch Visual Attention Network (VAN) model."""
+"""PyTorch Visual Attention Network (VAN) model."""
 
 import math
 from collections import OrderedDict
@@ -48,7 +48,6 @@ _IMAGE_CLASS_CHECKPOINT = "Visual-Attention-Network/van-base"
 _IMAGE_CLASS_EXPECTED_OUTPUT = "tabby, tabby cat"
 
 
-# Copied from transformers.models.convnext.modeling_convnext.drop_path
 def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = False) -> torch.Tensor:
     """
     Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
@@ -69,7 +68,6 @@ def drop_path(input: torch.Tensor, drop_prob: float = 0.0, training: bool = Fals
     return output
 
 
-# Copied from transformers.models.convnext.modeling_convnext.ConvNextDropPath with ConvNext->Van
 class VanDropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks)."""
 
@@ -88,7 +86,7 @@ class VanOverlappingPatchEmbedder(nn.Module):
     """
     Downsamples the input using a patchify operation with a `stride` of 4 by default making adjacent windows overlap by
     half of the area. From [PVTv2: Improved Baselines with Pyramid Vision
-    Transformer](https://arxiv.org/abs/2106.13797).
+    Transformer](https://huggingface.co/papers/2106.13797).
     """
 
     def __init__(self, in_channels: int, hidden_size: int, patch_size: int = 7, stride: int = 4):
@@ -107,7 +105,7 @@ class VanOverlappingPatchEmbedder(nn.Module):
 class VanMlpLayer(nn.Module):
     """
     MLP with depth-wise convolution, from [PVTv2: Improved Baselines with Pyramid Vision
-    Transformer](https://arxiv.org/abs/2106.13797).
+    Transformer](https://huggingface.co/papers/2106.13797).
     """
 
     def __init__(
@@ -313,7 +311,9 @@ class VanEncoder(nn.Module):
         hidden_sizes = config.hidden_sizes
         depths = config.depths
         mlp_ratios = config.mlp_ratios
-        drop_path_rates = [x.item() for x in torch.linspace(0, config.drop_path_rate, sum(config.depths))]
+        drop_path_rates = [
+            x.item() for x in torch.linspace(0, config.drop_path_rate, sum(config.depths), device="cpu")
+        ]
 
         for num_stage, (patch_size, stride, hidden_size, depth, mlp_expantion, drop_path_rate) in enumerate(
             zip(patch_sizes, strides, hidden_sizes, depths, mlp_ratios, drop_path_rates)
@@ -536,3 +536,6 @@ class VanForImageClassification(VanPreTrainedModel):
             return ((loss,) + output) if loss is not None else output
 
         return ImageClassifierOutputWithNoAttention(loss=loss, logits=logits, hidden_states=outputs.hidden_states)
+
+
+__all__ = ["VanForImageClassification", "VanModel", "VanPreTrainedModel"]

@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TimeSformer model configuration"""
+"""TimeSformer model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -124,3 +124,6 @@ class TimesformerConfig(PretrainedConfig):
 
         self.attention_type = attention_type
         self.drop_path_rate = drop_path_rate
+
+
+__all__ = ["TimesformerConfig"]

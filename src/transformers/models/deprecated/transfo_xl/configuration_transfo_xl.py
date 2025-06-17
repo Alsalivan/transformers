@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Transformer XL configuration"""
+"""Transformer XL configuration"""
 
 from ....configuration_utils import PretrainedConfig
 from ....utils import logging
@@ -49,7 +49,7 @@ class TransfoXLConfig(PretrainedConfig):
         d_inner (`int`, *optional*, defaults to 4096):
             Inner dimension in FF
         div_val (`int`, *optional*, defaults to 4):
-            Divident value for adapative input and softmax
+            Divident value for adaptive input and softmax
         pre_lnorm (`boolean`, *optional*, defaults to `False`):
             Whether or not to apply LayerNorm to the input instead of the output in the blocks.
         n_layer (`int`, *optional*, defaults to 18):
@@ -184,3 +184,6 @@ class TransfoXLConfig(PretrainedConfig):
         raise NotImplementedError(
             f"The model {self.model_type} is one of the few models that has no sequence length limit."
         )
+
+
+__all__ = ["TransfoXLConfig"]

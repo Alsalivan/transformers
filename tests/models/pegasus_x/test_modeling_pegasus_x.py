@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Testing suite for the PyTorch PEGASUS-X model. """
-
+"""Testing suite for the PyTorch PEGASUS-X model."""
 
 import copy
 import math
@@ -80,7 +78,7 @@ class PegasusXModelTester:
         hidden_act="gelu",
         hidden_dropout_prob=0.1,
         attention_probs_dropout_prob=0.1,
-        max_position_embeddings=20,
+        max_position_embeddings=50,
         eos_token_id=2,
         pad_token_id=1,
         bos_token_id=0,
@@ -204,10 +202,8 @@ class PegasusXModelTester:
 @require_torch
 class PegasusXModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, unittest.TestCase):
     all_model_classes = (PegasusXModel, PegasusXForConditionalGeneration) if is_torch_available() else ()
-    all_generative_model_classes = (PegasusXForConditionalGeneration,) if is_torch_available() else ()
     pipeline_model_mapping = (
         {
-            "conversational": PegasusXForConditionalGeneration,
             "feature-extraction": PegasusXModel,
             "summarization": PegasusXForConditionalGeneration,
             "text2text-generation": PegasusXForConditionalGeneration,
@@ -308,7 +304,8 @@ class PegasusXModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterM
             inputs_dict["output_attentions"] = True
             inputs_dict["output_hidden_states"] = False
             config.return_dict = True
-            model = model_class(config)
+            model = model_class._from_config(config, attn_implementation="eager")
+            config = model.config
             model.to(torch_device)
             model.eval()
             with torch.no_grad():
@@ -401,11 +398,11 @@ class PegasusXModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterM
                 ],
             )
 
-    def _check_encoder_attention_for_generate(self, attentions, batch_size, config, seq_length):
+    def _check_encoder_attention_for_generate(self, attentions, batch_size, config, prompt_length):
         encoder_expected_shape = (
             batch_size,
             config.num_attention_heads,
-            math.ceil(seq_length / config.block_size),
+            math.ceil(prompt_length / config.block_size),
             config.block_size,
             config.block_size + config.num_global_tokens,
         )
@@ -415,8 +412,8 @@ class PegasusXModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterM
             [encoder_expected_shape] * len(attentions),
         )
 
-    def _check_encoder_hidden_states_for_generate(self, hidden_states, batch_size, config, seq_length):
-        encoder_expected_shape = (batch_size, self.round_up(seq_length, config.block_size), config.hidden_size)
+    def _check_encoder_hidden_states_for_generate(self, hidden_states, batch_size, config, prompt_length):
+        encoder_expected_shape = (batch_size, self.round_up(prompt_length, config.block_size), config.hidden_size)
         self.assertIsInstance(hidden_states, tuple)
         # Only the last layer will have the hidden states truncated back to token level
         self.assertListEqual(
@@ -426,7 +423,7 @@ class PegasusXModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterM
         # Only the last layer will have the hidden states truncated back to token level
         self.assertEqual(
             hidden_states[-1][0].shape,
-            (batch_size, seq_length, config.hidden_size),
+            (batch_size, prompt_length, config.hidden_size),
         )
 
     def test_hidden_states_output(self):
@@ -594,10 +591,10 @@ class PegasusXModelIntegrationTests(unittest.TestCase):
         self.assertEqual(output.shape, expected_shape)
         # change to expected output here
         expected_slice = torch.tensor(
-            [[0.0702, -0.1552, 0.1192], [0.0836, -0.1848, 0.1304], [0.0673, -0.1686, 0.1045]], device=torch_device
+            [[[0.0702, -0.1552, 0.1192], [0.0836, -0.1848, 0.1304], [0.0673, -0.1686, 0.1045]]], device=torch_device
         )
 
-        self.assertTrue(torch.allclose(output[:, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(output[:, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE)
 
     def test_inference_head(self):
         model = PegasusXForConditionalGeneration.from_pretrained("google/pegasus-x-base").to(torch_device)
@@ -612,9 +609,10 @@ class PegasusXModelIntegrationTests(unittest.TestCase):
         self.assertEqual(output.shape, expected_shape)
         # change to expected output here
         expected_slice = torch.tensor(
-            [[0.0, 9.5705185, 1.5897303], [0.0, 9.833374, 1.5828674], [0.0, 10.429961, 1.5643371]], device=torch_device
+            [[[0.0, 9.5705185, 1.5897303], [0.0, 9.833374, 1.5828674], [0.0, 10.429961, 1.5643371]]],
+            device=torch_device,
         )
-        self.assertTrue(torch.allclose(output[:, :3, :3], expected_slice, atol=TOLERANCE))
+        torch.testing.assert_close(output[:, :3, :3], expected_slice, rtol=TOLERANCE, atol=TOLERANCE)
 
     def test_seq_to_seq_generation(self):
         hf = PegasusXForConditionalGeneration.from_pretrained("google/pegasus-x-base-arxiv").to(torch_device)
@@ -639,8 +637,7 @@ class PegasusXModelIntegrationTests(unittest.TestCase):
             batch_input,
             max_length=512,
             padding="max_length",
-            truncation_strategy="only_first",
-            truncation=True,
+            truncation="only_first",
             return_tensors="pt",
         )
 
@@ -680,7 +677,7 @@ class PegasusXStandaloneDecoderModelTester:
         decoder_layers=2,
         encoder_attention_heads=4,
         decoder_attention_heads=4,
-        max_position_embeddings=30,
+        max_position_embeddings=50,
         is_encoder_decoder=False,
         pad_token_id=0,
         bos_token_id=1,
@@ -823,7 +820,7 @@ class PegasusXStandaloneDecoderModelTester:
 
         # get two different outputs
         output_from_no_past = model(next_input_ids)["last_hidden_state"]
-        output_from_past = model(next_tokens, past_key_values=past_key_values)["last_hidden_state"]
+        output_from_past = model(next_tokens, past_key_values=past_key_values, use_cache=True)["last_hidden_state"]
 
         # select random slice
         random_slice_idx = ids_tensor((1,), output_from_past.shape[-1]).item()
@@ -850,9 +847,8 @@ class PegasusXStandaloneDecoderModelTester:
 
 
 @require_torch
-class PegasusXStandaloneDecoderModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase):
+class PegasusXStandaloneDecoderModelTest(ModelTesterMixin, unittest.TestCase):
     all_model_classes = (PegasusXDecoder,) if is_torch_available() else ()
-    all_generative_model_classes = ()
     test_pruning = False
     is_encoder_decoder = False
     test_head_masking = False
@@ -874,6 +870,10 @@ class PegasusXStandaloneDecoderModelTest(ModelTesterMixin, GenerationTesterMixin
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_decoder_model_attention_mask_past(*config_and_inputs)
 
+    @unittest.skip(reason="Decoder cannot keep gradients")
     def test_retain_grad_hidden_states_attentions(self):
-        # decoder cannot keep gradients
+        return
+
+    @unittest.skip(reason="Decoder cannot keep gradients")
+    def test_flex_attention_with_grads():
         return

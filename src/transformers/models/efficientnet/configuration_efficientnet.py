@@ -12,10 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" EfficientNet model configuration"""
+"""EfficientNet model configuration"""
 
 from collections import OrderedDict
-from typing import List, Mapping
+from collections.abc import Mapping
+from typing import List
 
 from packaging import version
 
@@ -67,7 +68,7 @@ class EfficientNetConfig(PretrainedConfig):
         hidden_act (`str` or `function`, *optional*, defaults to `"silu"`):
             The non-linear activation function (function or string) in each block. If string, `"gelu"`, `"relu"`,
             `"selu", `"gelu_new"`, `"silu"` and `"mish"` are supported.
-        hiddem_dim (`int`, *optional*, defaults to 1280):
+        hidden_dim (`int`, *optional*, defaults to 1280):
             The hidden dimension of the layer before the classification head.
         pooling_type (`str` or `function`, *optional*, defaults to `"mean"`):
             Type of final pooling to be applied before the dense classification head. Available options are [`"mean"`,
@@ -164,3 +165,6 @@ class EfficientNetOnnxConfig(OnnxConfig):
     @property
     def atol_for_validation(self) -> float:
         return 1e-5
+
+
+__all__ = ["EfficientNetConfig", "EfficientNetOnnxConfig"]

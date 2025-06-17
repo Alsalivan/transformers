@@ -13,8 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TF 2.0 CamemBERT model."""
-
+"""TF 2.0 CamemBERT model."""
 
 from __future__ import annotations
 
@@ -1788,3 +1787,15 @@ class TFCamembertForCausalLM(TFCamembertPreTrainedModel, TFCausalLanguageModelin
         if getattr(self, "lm_head", None) is not None:
             with tf.name_scope(self.lm_head.name):
                 self.lm_head.build(None)
+
+
+__all__ = [
+    "TFCamembertForCausalLM",
+    "TFCamembertForMaskedLM",
+    "TFCamembertForMultipleChoice",
+    "TFCamembertForQuestionAnswering",
+    "TFCamembertForSequenceClassification",
+    "TFCamembertForTokenClassification",
+    "TFCamembertModel",
+    "TFCamembertPreTrainedModel",
+]

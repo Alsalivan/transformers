@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2018 The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Convert pytorch checkpoints to TensorFlow"""
-
+"""Convert pytorch checkpoints to TensorFlow"""
 
 import argparse
 import os
@@ -107,7 +105,6 @@ if is_torch_available():
         XLMWithLMHeadModel,
         XLNetLMHeadModel,
     )
-    from .pytorch_utils import is_torch_greater_or_equal_than_1_13
 
 
 logging.set_verbosity_info()
@@ -280,12 +277,7 @@ def convert_pt_checkpoint_to_tf(
     if compare_with_pt_model:
         tfo = tf_model(tf_model.dummy_inputs, training=False)  # build the network
 
-        weights_only_kwarg = {"weights_only": True} if is_torch_greater_or_equal_than_1_13 else {}
-        state_dict = torch.load(
-            pytorch_checkpoint_path,
-            map_location="cpu",
-            **weights_only_kwarg,
-        )
+        state_dict = torch.load(pytorch_checkpoint_path, map_location="cpu", weights_only=True)
         pt_model = pt_model_class.from_pretrained(
             pretrained_model_name_or_path=None, config=config, state_dict=state_dict
         )

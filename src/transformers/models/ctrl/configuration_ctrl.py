@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Salesforce CTRL configuration"""
+"""Salesforce CTRL configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -111,3 +111,6 @@ class CTRLConfig(PretrainedConfig):
         self.use_cache = use_cache
 
         super().__init__(**kwargs)
+
+
+__all__ = ["CTRLConfig"]

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tokenization classes."""
+
 import os
 from shutil import copyfile
 from typing import List, Optional, Tuple
@@ -143,10 +144,6 @@ class CpmTokenizerFast(PreTrainedTokenizerFast):
         self.jieba = jieba
         self.translator = str.maketrans(" \n", "\u2582\u2583")
 
-    @property
-    def can_save_slow_tokenizer(self) -> bool:
-        return os.path.isfile(self.vocab_file) if self.vocab_file else False
-
     # Copied from transformers.models.xlnet.tokenization_xlnet_fast.XLNetTokenizerFast.build_inputs_with_special_tokens
     def build_inputs_with_special_tokens(
         self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
@@ -235,3 +232,6 @@ class CpmTokenizerFast(PreTrainedTokenizerFast):
         text = super()._decode(*args, **kwargs)
         text = text.replace(" ", "").replace("\u2582", " ").replace("\u2583", "\n")
         return text
+
+
+__all__ = ["CpmTokenizerFast"]

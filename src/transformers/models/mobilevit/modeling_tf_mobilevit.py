@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 # Original license: https://github.com/apple/ml-cvnets/blob/main/LICENSE
-""" TensorFlow 2.0 MobileViT model."""
+"""TensorFlow 2.0 MobileViT model."""
 
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ class TFMobileViTConvLayer(keras.layers.Layer):
 
 class TFMobileViTInvertedResidual(keras.layers.Layer):
     """
-    Inverted residual block (MobileNetv2): https://arxiv.org/abs/1801.04381
+    Inverted residual block (MobileNetv2): https://huggingface.co/papers/1801.04381
     """
 
     def __init__(
@@ -262,7 +262,7 @@ class TFMobileViTSelfAttention(keras.layers.Layer):
 
         if hidden_size % config.num_attention_heads != 0:
             raise ValueError(
-                f"The hidden size {hidden_size,} is not a multiple of the number of attention "
+                f"The hidden size {hidden_size} is not a multiple of the number of attention "
                 f"heads {config.num_attention_heads}."
             )
 
@@ -487,7 +487,7 @@ class TFMobileViTTransformer(keras.layers.Layer):
 
 class TFMobileViTLayer(keras.layers.Layer):
     """
-    MobileViT block: https://arxiv.org/abs/2110.02178
+    MobileViT block: https://huggingface.co/papers/2110.02178
     """
 
     def __init__(
@@ -1125,7 +1125,7 @@ class TFMobileViTASPPPooling(keras.layers.Layer):
 
 class TFMobileViTASPP(keras.layers.Layer):
     """
-    ASPP module defined in DeepLab papers: https://arxiv.org/abs/1606.00915, https://arxiv.org/abs/1706.05587
+    ASPP module defined in DeepLab papers: https://huggingface.co/papers/1606.00915, https://huggingface.co/papers/1706.05587
     """
 
     def __init__(self, config: MobileViTConfig, **kwargs) -> None:
@@ -1208,7 +1208,7 @@ class TFMobileViTASPP(keras.layers.Layer):
 
 class TFMobileViTDeepLabV3(keras.layers.Layer):
     """
-    DeepLabv3 architecture: https://arxiv.org/abs/1706.05587
+    DeepLabv3 architecture: https://huggingface.co/papers/1706.05587
     """
 
     def __init__(self, config: MobileViTConfig, **kwargs) -> None:
@@ -1323,6 +1323,9 @@ class TFMobileViTForSemanticSegmentation(TFMobileViTPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        if labels is not None and not self.config.num_labels > 1:
+            raise ValueError("The number of labels should be greater than one")
+
         outputs = self.mobilevit(
             pixel_values,
             output_hidden_states=True,  # we need the intermediate hidden states
@@ -1336,10 +1339,7 @@ class TFMobileViTForSemanticSegmentation(TFMobileViTPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if not self.config.num_labels > 1:
-                raise ValueError("The number of labels should be greater than one")
-            else:
-                loss = self.hf_compute_loss(logits=logits, labels=labels)
+            loss = self.hf_compute_loss(logits=logits, labels=labels)
 
         # make logits of shape (batch_size, num_labels, height, width) to
         # keep them consistent across APIs
@@ -1368,3 +1368,11 @@ class TFMobileViTForSemanticSegmentation(TFMobileViTPreTrainedModel):
         if getattr(self, "segmentation_head", None) is not None:
             with tf.name_scope(self.segmentation_head.name):
                 self.segmentation_head.build(None)
+
+
+__all__ = [
+    "TFMobileViTForImageClassification",
+    "TFMobileViTForSemanticSegmentation",
+    "TFMobileViTModel",
+    "TFMobileViTPreTrainedModel",
+]

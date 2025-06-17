@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" MRA model configuration"""
+"""MRA model configuration"""
 
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
@@ -132,3 +132,6 @@ class MraConfig(PretrainedConfig):
         self.approx_mode = approx_mode
         self.initial_prior_first_n_blocks = initial_prior_first_n_blocks
         self.initial_prior_diagonal_n_blocks = initial_prior_diagonal_n_blocks
+
+
+__all__ = ["MraConfig"]

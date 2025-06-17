@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tokenization classes for SeamlessM4T."""
+
 import os
 from shutil import copyfile
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -28,6 +29,7 @@ from ...tokenization_utils import (
 )
 from ...tokenization_utils_base import AddedToken
 from ...utils import PaddingStrategy, logging
+from ...utils.import_utils import requires
 
 
 logger = logging.get_logger(__name__)
@@ -39,6 +41,7 @@ SPIECE_UNDERLINE = "▁"
 VOCAB_FILES_NAMES = {"vocab_file": "sentencepiece.bpe.model"}
 
 
+@requires(backends=("sentencepiece",))
 class SeamlessM4TTokenizer(PreTrainedTokenizer):
     """
     Construct a SeamlessM4T tokenizer.
@@ -462,9 +465,8 @@ class SeamlessM4TTokenizer(PreTrainedTokenizer):
         `unk_token`. Here is an example with `unk_token = "<unk>"` and `unk_token_length = 4`.
         `self.tokenizer.sp_model.encode("<unk> Hey", out_type = str)[4:]`.
         """
-        tokens = self.sp_model.encode(text, out_type=str)
         if self.legacy or not text.startswith((SPIECE_UNDERLINE, " ")):
-            return tokens
+            return self.sp_model.encode(text, out_type=str)
 
         # 1. Encode string + prefix ex: "<unk> Hey"
         tokens = self.sp_model.encode(self.unk_token + text, out_type=str)
@@ -560,3 +562,6 @@ class SeamlessM4TTokenizer(PreTrainedTokenizer):
 
         self.prefix_tokens = [self.eos_token_id, self.cur_lang_code]
         self.suffix_tokens = [self.eos_token_id]
+
+
+__all__ = ["SeamlessM4TTokenizer"]

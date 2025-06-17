@@ -12,8 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" TensorFlow SegFormer model."""
-
+"""TensorFlow SegFormer model."""
 
 from __future__ import annotations
 
@@ -116,7 +115,7 @@ class TFSegformerOverlapPatchEmbeddings(keras.layers.Layer):
 
 class TFSegformerEfficientSelfAttention(keras.layers.Layer):
     """SegFormer's efficient self-attention mechanism. Employs the sequence reduction process introduced in the [PvT
-    paper](https://arxiv.org/abs/2102.12122)."""
+    paper](https://huggingface.co/papers/2102.12122)."""
 
     def __init__(
         self,
@@ -326,8 +325,8 @@ class TFSegformerMixFFN(keras.layers.Layer):
         self,
         config: SegformerConfig,
         in_features: int,
-        hidden_features: int = None,
-        out_features: int = None,
+        hidden_features: Optional[int] = None,
+        out_features: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -989,6 +988,9 @@ class TFSegformerForSemanticSegmentation(TFSegformerPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
 
+        if labels is not None and not self.config.num_labels > 1:
+            raise ValueError("The number of labels should be greater than one")
+
         outputs = self.segformer(
             pixel_values,
             output_attentions=output_attentions,
@@ -1002,10 +1004,7 @@ class TFSegformerForSemanticSegmentation(TFSegformerPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if not self.config.num_labels > 1:
-                raise ValueError("The number of labels should be greater than one")
-            else:
-                loss = self.hf_compute_loss(logits=logits, labels=labels)
+            loss = self.hf_compute_loss(logits=logits, labels=labels)
 
         # make logits of shape (batch_size, num_labels, height, width) to
         # keep them consistent across APIs
@@ -1035,3 +1034,12 @@ class TFSegformerForSemanticSegmentation(TFSegformerPreTrainedModel):
         if getattr(self, "decode_head", None) is not None:
             with tf.name_scope(self.decode_head.name):
                 self.decode_head.build(None)
+
+
+__all__ = [
+    "TFSegformerDecodeHead",
+    "TFSegformerForImageClassification",
+    "TFSegformerForSemanticSegmentation",
+    "TFSegformerModel",
+    "TFSegformerPreTrainedModel",
+]
