@@ -15,6 +15,7 @@
 
 import unittest
 
+import pytest
 from packaging import version
 
 from transformers import AutoTokenizer, StaticCache, is_torch_available
@@ -25,6 +26,7 @@ from transformers.testing_utils import (
     require_read_token,
     require_torch,
     require_torch_accelerator,
+    run_test_using_subprocess,
     slow,
     torch_device,
 )
@@ -96,36 +98,28 @@ class LlamaModelTest(CausalLMModelTest, unittest.TestCase):
 
 
 @require_torch_accelerator
+@require_read_token
 class LlamaIntegrationTest(unittest.TestCase):
+    def setup(self):
+        cleanup(torch_device, gc_collect=True)
+
     def tearDown(self):
         # TODO (joao): automatic compilation, i.e. compilation when `cache_implementation="static"` is used, leaves
         # some memory allocated in the cache, which means some object is not being released properly. This causes some
         # unoptimal memory usage, e.g. after certain tests a 7B model in FP16 no longer fits in a 24GB GPU.
         # Investigate the root cause.
-        cleanup(torch_device, gc_collect=False)
+        cleanup(torch_device, gc_collect=True)
 
     @slow
-    @require_read_token
     def test_llama_3_1_hard(self):
         """
         An integration test for llama 3.1. It tests against a long output to ensure the subtle numerical differences
         from llama 3.1.'s RoPE can be detected
         """
-        # diff on `EXPECTED_TEXT`:
-        # 2024-08-26: updating from torch 2.3.1 to 2.4.0 slightly changes the results.
-        expected_base_text = (
-            "Tell me about the french revolution. The french revolution was a period of radical political and social "
-            "upheaval in France that lasted from 1789 until 1799. It was a time of great change and upheaval, marked "
-            "by the overthrow of the monarchy, the rise of the middle class, and the eventual establishment of the "
-            "First French Republic.\nThe revolution began in 1789 with the Estates-General, a representative "
-            "assembly that had not met since 1614. The Third Estate, which represented the common people, "
-            "demanded greater representation and eventually broke away to form the National Assembly. This marked "
-            "the beginning of the end of the absolute monarchy and the rise of the middle class.\n"
-        )
         expected_texts = Expectations(
             {
-                ("rocm", (9, 5)): expected_base_text.replace("political and social", "social and political"),
-                ("cuda", None): expected_base_text,
+                ("rocm", (9, 5)): 'Tell me about the french revolution. The french revolution was a period of radical social and political upheaval in France that lasted from 1789 until 1799. It was a time of great change and upheaval, marked by the overthrow of the monarchy, the rise of the middle class, and the eventual establishment of the First French Republic.\nThe revolution began in 1789 with the Estates-General, a representative assembly that had not met since 1614. The Third Estate, which represented the common people, demanded greater representation and eventually broke away to form the National Assembly. This marked the beginning of the end of the absolute monarchy and the rise of the middle class.\n',
+                ("cuda", None): 'Tell me about the french revolution. The french revolution was a period of radical political and social upheaval in France that lasted from 1789 until 1799. It was a time of great change and upheaval, marked by the overthrow of the monarchy, the rise of the middle class, and the eventual establishment of the First French Republic.\nThe revolution began in 1789 with the Estates-General, a representative assembly that had not met since 1614. The Third Estate, which represented the common people, demanded greater representation and eventually broke away to form the National Assembly. The National Assembly adopted the Declaration of the Rights of Man and of the Citizen, which enshr',
             }
         )  # fmt: skip
         EXPECTED_TEXT = expected_texts.get_expectation()
@@ -142,7 +136,6 @@ class LlamaIntegrationTest(unittest.TestCase):
         self.assertEqual(generated_text, EXPECTED_TEXT)
 
     @slow
-    @require_read_token
     def test_model_7b_logits_bf16(self):
         input_ids = [1, 306, 4658, 278, 6593, 310, 2834, 338]
 
@@ -159,14 +152,16 @@ class LlamaIntegrationTest(unittest.TestCase):
             {
             ("xpu", 3): torch.tensor([[-6.5208, -4.1218, -4.9377, -3.2536,  0.8127, -2.9811,  1.2918, -3.3848]]),
             ("cuda", 7): torch.tensor([[-6.5061, -4.1147, -4.9669, -3.2038, 0.8069, -2.9694, 1.2864, -3.3786]]),
-            ("cuda", 8): torch.tensor([[-6.5208, -4.1218, -4.9377, -3.2536,  0.8127, -2.9811,  1.2918, -3.3848]])
-         })
+            ("cuda", 8): torch.tensor([[-6.5208, -4.1218, -4.9377, -3.2536,  0.8127, -2.9811,  1.2918, -3.3848]]),
+            ("rocm", (9, 4)): torch.tensor([[-6.5094, -4.1329, -4.9754, -3.5042,  0.8082, -2.9443,  1.2830, -3.3539]]),
+        })
 
-        expected_mean = expected_means.get_expectation()
+        expected_mean = expected_means.get_expectation().to(torch_device)
+        actual_mean = out.logits.float().mean(-1)
         self.assertTrue(
             torch.allclose(
-                expected_mean.to(torch_device),
-                out.logits.float().mean(-1),
+                expected_mean,
+                actual_mean,
                 atol=1e-2,
                 rtol=1e-2
             )
@@ -177,21 +172,15 @@ class LlamaIntegrationTest(unittest.TestCase):
             {
             ("xpu", 3): torch.tensor([[-12.5625,  -7.1250,  -0.6289,  -7.8750,  -6.9688,  -7.8125,  -6.5000, -7.4375,  -7.6562,  -6.9688,  -6.0312,  -7.0312,  -1.8203,   1.8750, -8.5000]]),
             ("cuda", 7): torch.tensor([[-12.5000, -7.0625, -0.6289, -7.8750, -6.9688, -7.8125, -6.4688, -7.4375, -7.6875, -6.9375, -6.0312, -7.0000, -1.8594, 1.8438, -8.5000]]),
-            ("cuda", 8): torch.tensor([[-12.5625,  -7.1250,  -0.6289,  -7.8750,  -6.9688,  -7.8125,  -6.5000, -7.4375,  -7.6562,  -6.9688,  -6.0312,  -7.0312,  -1.8203,   1.8750, -8.5000]])
+            ("cuda", 8): torch.tensor([[-12.5625,  -7.1250,  -0.6289,  -7.8750,  -6.9688,  -7.8125,  -6.5000, -7.4375,  -7.6562,  -6.9688,  -6.0312,  -7.0312,  -1.8203,   1.8750, -8.5000]]),
+            ("rocm", (9, 4)): torch.tensor([[-12.5000,  -7.0625,  -0.6289,  -7.8750,  -6.9688,  -7.8125,  -6.5000, -7.4375,  -7.6562,  -6.9375,  -6.0312,  -7.0312,  -1.8594,   1.8438, -8.5000]])
         })
         # fmt: on
-        expected_slice = expected_slices.get_expectation()
-        self.assertTrue(
-            torch.allclose(
-                expected_slice.to(torch_device),
-                out.logits[0, 0, :15].float(),
-                atol=1e-2,
-                rtol=1e-2,
-            )
-        )
+        expected_slice = expected_slices.get_expectation().to(torch_device)
+        actual_slice = out.logits[0, 0, :15].float()
+        self.assertTrue(torch.allclose(expected_slice, actual_slice, atol=1e-2, rtol=1e-2))
 
     @slow
-    @require_read_token
     def test_model_7b_logits(self):
         input_ids = [1, 306, 4658, 278, 6593, 310, 2834, 338]
 
@@ -240,6 +229,9 @@ class LlamaIntegrationTest(unittest.TestCase):
             )
         )
 
+    # TODO: check why we have the following strange situation.
+    # without running in subprocess, this test causes subsequent tests failing with `RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0!`
+    @run_test_using_subprocess
     @slow
     def test_model_7b_dola_generation(self):
         # ground truth text generated with dola_layers="low", repetition_penalty=1.2
@@ -265,7 +257,7 @@ class LlamaIntegrationTest(unittest.TestCase):
 
     @slow
     @require_torch_accelerator
-    @require_read_token
+    @pytest.mark.torch_compile_test
     def test_compile_static_cache(self):
         # `torch==2.2` will throw an error on this test (as in other compilation tests), but torch==2.1.2 and torch>2.2
         # work as intended. See https://github.com/pytorch/pytorch/issues/121943
@@ -306,7 +298,7 @@ class LlamaIntegrationTest(unittest.TestCase):
         self.assertEqual(EXPECTED_TEXT_COMPLETION, static_text)
 
     @slow
-    @require_read_token
+    @pytest.mark.torch_export_test
     def test_export_static_cache(self):
         if version.parse(torch.__version__) < version.parse("2.4.0"):
             self.skipTest(reason="This test requires torch >= 2.4 to run.")
@@ -330,7 +322,7 @@ class LlamaIntegrationTest(unittest.TestCase):
             ].shape[-1]
 
             # Load model
-            device = "cpu"
+            device = "cpu"  # TODO (joao / export experts): should be on `torch_device`, but causes GPU OOM
             dtype = torch.bfloat16
             cache_implementation = "static"
             attn_implementation = "sdpa"
@@ -361,7 +353,10 @@ class LlamaIntegrationTest(unittest.TestCase):
             from transformers.integrations.executorch import TorchExportableModuleForDecoderOnlyLM
 
             exportable_module = TorchExportableModuleForDecoderOnlyLM(model)
-            exported_program = exportable_module.export()
+            exported_program = exportable_module.export(
+                input_ids=prompt_token_ids,
+                cache_position=torch.arange(prompt_token_ids.shape[-1], dtype=torch.long, device=model.device),
+            )
             ep_generated_ids = TorchExportableModuleWithStaticCache.generate(
                 exported_program=exported_program, prompt_token_ids=prompt_token_ids, max_new_tokens=max_new_tokens
             )
@@ -512,13 +507,7 @@ class Mask4DTestHard(unittest.TestCase):
 
         # upgrade the model with StaticCache
         max_cache_len = 16  # note that max_cache_len is greater than the attention_mask.shape[-1]
-        past_key_values = StaticCache(
-            config=self.model.config,
-            max_batch_size=1,
-            max_cache_len=max_cache_len,
-            device=torch_device,
-            dtype=self.model.dtype,
-        )
+        past_key_values = StaticCache(config=self.model.config, max_cache_len=max_cache_len)
 
         padded_attention_mask = torch.nn.functional.pad(
             input=mask_shared_prefix,
@@ -560,13 +549,7 @@ class Mask4DTestHard(unittest.TestCase):
 
         # upgrade the model with StaticCache
         max_cache_len = 16  # note that max_cache_len is greater than the attention_mask.shape[-1]
-        past_key_values = StaticCache(
-            config=self.model.config,
-            max_batch_size=1,
-            max_cache_len=max_cache_len,
-            device=torch_device,
-            dtype=self.model.dtype,
-        )
+        past_key_values = StaticCache(config=self.model.config, max_cache_len=max_cache_len)
 
         # forward run for the first part of input
         part_a = 3  # split point

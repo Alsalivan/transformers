@@ -5,10 +5,12 @@
 #                          modular_add_function.py file directly. One of our CI enforces this.
 #                🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
 # Note that zamba does not have the `apply_rotary_pos_emb` function!
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 from torch import nn
+
+from ...utils.deprecation import deprecate_kwarg
 
 
 def rotate_half(x):
@@ -62,5 +64,6 @@ class TestAttention(nn.Module):
     def __init__(self):
         pass
 
-    def forward(self) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
+    def forward(self) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
         _ = apply_rotary_pos_emb(1, 1, 1, 1)

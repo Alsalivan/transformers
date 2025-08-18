@@ -18,8 +18,10 @@ import unittest
 
 import pytest
 from packaging import version
+from parameterized import parameterized
 
-from transformers import AutoTokenizer, MistralConfig, is_torch_available, set_seed
+from transformers import AutoTokenizer, DynamicCache, MistralConfig, is_torch_available, set_seed
+from transformers.cache_utils import DynamicSlidingWindowLayer
 from transformers.testing_utils import (
     DeviceProperties,
     Expectations,
@@ -112,6 +114,7 @@ class MistralModelTest(CausalLMModelTest, unittest.TestCase):
 
 
 @require_torch_accelerator
+@require_read_token
 class MistralIntegrationTest(unittest.TestCase):
     # This variable is used to determine which accelerator are we using for our runners (e.g. A10 or T4)
     # Depending on the hardware we get different logits / generations
@@ -120,6 +123,9 @@ class MistralIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.device_properties = get_device_properties()
+
+    def setUp(self):
+        cleanup(torch_device, gc_collect=True)
 
     def tearDown(self):
         cleanup(torch_device, gc_collect=True)
@@ -256,7 +262,7 @@ class MistralIntegrationTest(unittest.TestCase):
 
     @slow
     def test_speculative_generation(self):
-        EXPECTED_TEXT_COMPLETION = "My favourite condiment is 100% ketchup. I love it on everything. I’m not a big"
+        EXPECTED_TEXT_COMPLETION = "My favourite condiment is 100% Sriracha. I love it on everything. I have it on my"
         prompt = "My favourite condiment is "
         tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1", use_fast=False)
         model = MistralForCausalLM.from_pretrained(
@@ -272,8 +278,8 @@ class MistralIntegrationTest(unittest.TestCase):
         text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
         self.assertEqual(EXPECTED_TEXT_COMPLETION, text)
 
+    @pytest.mark.torch_compile_test
     @slow
-    @require_read_token
     def test_compile_static_cache(self):
         # `torch==2.2` will throw an error on this test (as in other compilation tests), but torch==2.1.2 and torch>2.2
         # work as intended. See https://github.com/pytorch/pytorch/issues/121943
@@ -317,8 +323,8 @@ class MistralIntegrationTest(unittest.TestCase):
         self.assertEqual(EXPECTED_TEXT_COMPLETION, static_text)
 
         # Static Cache + compile
-        forward_function = model.forward
-        model.forward = torch.compile(forward_function, mode="reduce-overhead", fullgraph=True)
+        forward_function = model.__call__
+        model.__call__ = torch.compile(forward_function, mode="reduce-overhead", fullgraph=True)
         generated_ids = model.generate(
             **inputs, max_new_tokens=NUM_TOKENS_TO_GENERATE, do_sample=False, cache_implementation="static"
         )
@@ -327,34 +333,85 @@ class MistralIntegrationTest(unittest.TestCase):
 
         # Sliding Window Cache + compile
         torch._dynamo.reset()
-        model.forward = torch.compile(forward_function, mode="reduce-overhead", fullgraph=True)
+        model.__call__ = torch.compile(forward_function, mode="reduce-overhead", fullgraph=True)
         generated_ids = model.generate(
             **inputs, max_new_tokens=NUM_TOKENS_TO_GENERATE, do_sample=False, cache_implementation="sliding_window"
         )
         static_compiled_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
         self.assertEqual(EXPECTED_TEXT_COMPLETION, static_compiled_text)
 
+    @parameterized.expand([("flash_attention_2",), ("sdpa",), ("flex_attention",), ("eager",)])
+    @require_flash_attn
+    @slow
+    def test_generation_beyond_sliding_window_dynamic(self, attn_implementation: str):
+        """Test that we can correctly generate beyond the sliding window. This is non-trivial as Mistral will use
+        a DynamicCache with only sliding layers."""
+
+        model_id = "mistralai/Mistral-7B-v0.1"
+        EXPECTED_COMPLETIONS = [
+            "This is a nice place. This is a nice place. This is a nice place. This is",
+            ", green, yellow, orange, purple, pink, brown, black, white, gray, silver",
+        ]
+
+        input_text = [
+            "This is a nice place. " * 800 + "I really enjoy the scenery,",  # This is larger than 4096 tokens
+            "A list of colors: red, blue",  # This will almost all be padding tokens
+        ]
+        tokenizer = AutoTokenizer.from_pretrained(model_id, padding="left")
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        inputs = tokenizer(input_text, padding=True, return_tensors="pt").to(torch_device)
+
+        model = MistralForCausalLM.from_pretrained(
+            model_id, attn_implementation=attn_implementation, device_map=torch_device, torch_dtype=torch.float16
+        )
+
+        # Make sure prefill is larger than sliding window
+        input_size = inputs.input_ids.shape[-1]
+        self.assertTrue(input_size > model.config.sliding_window)
+
+        # Should already be Dynamic by default, but let's make sure!
+        out = model.generate(**inputs, max_new_tokens=20, cache_implementation="dynamic", return_dict_in_generate=True)
+        output_text = tokenizer.batch_decode(out.sequences[:, input_size:])
+
+        self.assertEqual(output_text, EXPECTED_COMPLETIONS)
+
+        # Let's check that the dynamic cache has hybrid layers!
+        dynamic_cache = out.past_key_values
+        self.assertTrue(isinstance(dynamic_cache, DynamicCache))
+        for layer in dynamic_cache.layers:
+            self.assertTrue(isinstance(layer, DynamicSlidingWindowLayer))
+            self.assertEqual(layer.keys.shape[-2], model.config.sliding_window - 1)
+
 
 @slow
 @require_torch_accelerator
 class Mask4DTestHard(unittest.TestCase):
     model_name = "mistralai/Mistral-7B-v0.1"
-    _model = None
+    model = None
+    model_dtype = None
+
+    @classmethod
+    def setUpClass(cls):
+        cleanup(torch_device, gc_collect=True)
+        if cls.model_dtype is None:
+            cls.model_dtype = torch.float16
+        if cls.model is None:
+            cls.model = MistralForCausalLM.from_pretrained(cls.model_name, torch_dtype=cls.model_dtype).to(
+                torch_device
+            )
+
+    @classmethod
+    def tearDownClass(cls):
+        del cls.model_dtype
+        del cls.model
+        cleanup(torch_device, gc_collect=True)
+
+    def setUp(self):
+        cleanup(torch_device, gc_collect=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
 
     def tearDown(self):
         cleanup(torch_device, gc_collect=True)
-
-    @property
-    def model(self):
-        if self.__class__._model is None:
-            self.__class__._model = MistralForCausalLM.from_pretrained(
-                self.model_name, torch_dtype=self.model_dtype
-            ).to(torch_device)
-        return self.__class__._model
-
-    def setUp(self):
-        self.model_dtype = torch.float16
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
 
     def get_test_data(self):
         template = "my favorite {}"

@@ -13,12 +13,14 @@ specific language governing permissions and limitations under the License.
 rendered properly in your Markdown viewer.
 
 -->
+*This model was released on 2024-08-23 and added to Hugging Face Transformers on 2024-08-27.*
 
 
 <div class="flex flex-wrap space-x-1">
 <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-DE3412?style=flat&logo=pytorch&logoColor=white">
 <img alt="FlashAttention" src="https://img.shields.io/badge/%E2%9A%A1%EF%B8%8E%20FlashAttention-eae0c8?style=flat">
 <img alt="SDPA" src="https://img.shields.io/badge/SDPA-DE3412?style=flat&logo=pytorch&logoColor=white">
+<img alt="Tensor parallelism" src="https://img.shields.io/badge/Tensor%20parallelism-06b6d4?style=flat&logoColor=white">
 </div>
 
 # Granite
@@ -63,7 +65,7 @@ model = AutoModelForCausalLM.from_pretrained(
     attn_implementation="sdpa"
 )
 
-inputs = tokenizer("Explain quantum computing in simple terms", return_tensors="pt").to("cuda")
+inputs = tokenizer("Explain quantum computing in simple terms", return_tensors="pt").to(model.device)
 outputs = model.generate(**inputs, max_length=50, cache_implementation="static")
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 ```
@@ -88,13 +90,13 @@ quantization_config = BitsAndBytesConfig(load_in_4bit=True)
 tokenizer = AutoTokenizer.from_pretrained("ibm-granite/granite-3.3-8b-base")
 model = AutoModelForCausalLM.from_pretrained("ibm-granite/granite-3.3-8b-base", torch_dtype=torch.bfloat16, device_map="auto", attn_implementation="sdpa", quantization_config=quantization_config)
 
-inputs = tokenizer("Explain quantum computing in simple terms", return_tensors="pt").to("cuda")
+inputs = tokenizer("Explain quantum computing in simple terms", return_tensors="pt").to(model.device)
 outputs = model.generate(**inputs, max_length=50, cache_implementation="static")
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 
 quantization_config = BitsAndBytesConfig(load_in_4bit=True)
 
-tokenizer = AutoTokenizer.from_pretrained(""ibm-granite/granite-3.3-2b-base"")
+tokenizer = AutoTokenizer.from_pretrained("ibm-granite/granite-3.3-2b-base")
 model = AutoModelForCausalLM.from_pretrained(
     "ibm-granite/granite-3.3-2b-base",
     torch_dtype=torch.bfloat16,
@@ -103,7 +105,7 @@ model = AutoModelForCausalLM.from_pretrained(
     quantization_config=quantization_config,
 )
 
-input_ids = tokenizer("Explain artificial intelligence to a 10 year old", return_tensors="pt").to("cuda")
+input_ids = tokenizer("Explain artificial intelligence to a 10 year old", return_tensors="pt").to(model.device)
 outputs = model.generate(**inputs, max_length=50, cache_implementation="static")
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 ```

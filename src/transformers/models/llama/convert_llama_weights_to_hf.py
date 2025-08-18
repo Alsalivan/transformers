@@ -17,7 +17,6 @@ import json
 import os
 import tempfile
 import warnings
-from typing import List
 
 import torch
 from tokenizers import AddedToken, processors
@@ -361,8 +360,8 @@ def write_model(
         # Write configs
         index_dict["metadata"] = {"total_size": param_count * 2}
         write_json(index_dict, os.path.join(tmp_model_path, "pytorch_model.bin.index.json"))
-        ffn_dim_multiplier = params["ffn_dim_multiplier"] if "ffn_dim_multiplier" in params else 1
-        multiple_of = params["multiple_of"] if "multiple_of" in params else 256
+        ffn_dim_multiplier = params.get("ffn_dim_multiplier", 1)
+        multiple_of = params.get("multiple_of", 256)
 
         if is_llama_3(llama_version):
             bos_token_id = 128000
@@ -399,7 +398,7 @@ def write_model(
             max_position_embeddings=max_position_embeddings,
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
-            tie_word_embeddings=True if llama_version in ["3.2"] else False,
+            tie_word_embeddings=llama_version in ["3.2"],
         )
 
         config.save_pretrained(tmp_model_path)
@@ -560,7 +559,7 @@ def main():
     parser.add_argument(
         "--special_tokens",
         default=None,
-        type=List[str],
+        type=list[str],
         help="The list of special tokens that should be added to the model.",
     )
     parser.add_argument(

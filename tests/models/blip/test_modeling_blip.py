@@ -381,8 +381,10 @@ class BlipModelTester:
         return config, input_ids, attention_mask, pixel_values
 
     def get_config(self):
-        return BlipConfig.from_text_vision_configs(
-            self.text_model_tester.get_config(), self.vision_model_tester.get_config(), projection_dim=64
+        return BlipConfig(
+            text_config=self.text_model_tester.get_config().to_dict(),
+            vision_config=self.vision_model_tester.get_config().to_dict(),
+            projection_dim=64,
         )
 
     def create_and_check_model(self, config, input_ids, attention_mask, pixel_values):
@@ -475,8 +477,19 @@ class BlipModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCase):
                             msg=f"Parameter {name} of model {model_class} seems not properly initialized",
                         )
                     else:
+                        # See PR #38607 (to avoid flakiness)
+                        data = torch.flatten(param.data)
+                        n_elements = torch.numel(data)
+                        # skip 2.5% of elements on each side to avoid issues caused by `nn.init.trunc_normal_` described in
+                        # https://github.com/huggingface/transformers/pull/27906#issuecomment-1846951332
+                        n_elements_to_skip_on_each_side = int(n_elements * 0.025)
+                        data_to_check = torch.sort(data).values
+                        if n_elements_to_skip_on_each_side > 0:
+                            data_to_check = data_to_check[
+                                n_elements_to_skip_on_each_side:-n_elements_to_skip_on_each_side
+                            ]
                         self.assertIn(
-                            ((param.data.mean() * 1e9).round() / 1e9).item(),
+                            ((data_to_check.mean() * 1e9).round() / 1e9).item(),
                             [0.0, 1.0],
                             msg=f"Parameter {name} of model {model_class} seems not properly initialized",
                         )
@@ -523,8 +536,8 @@ class BlipModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCase):
             loaded_model_state_dict = loaded_model.state_dict()
 
             non_persistent_buffers = {}
-            for key in loaded_model_state_dict.keys():
-                if key not in model_state_dict.keys():
+            for key in loaded_model_state_dict:
+                if key not in model_state_dict:
                     non_persistent_buffers[key] = loaded_model_state_dict[key]
 
             loaded_model_state_dict = {
@@ -653,8 +666,10 @@ class BlipTextRetrievalModelTester:
         return config, input_ids, attention_mask, pixel_values
 
     def get_config(self):
-        return BlipConfig.from_text_vision_configs(
-            self.text_model_tester.get_config(), self.vision_model_tester.get_config(), projection_dim=64
+        return BlipConfig(
+            text_config=self.text_model_tester.get_config().to_dict(),
+            vision_config=self.vision_model_tester.get_config().to_dict(),
+            projection_dim=64,
         )
 
     def create_and_check_model(self, config, input_ids, attention_mask, pixel_values):
@@ -702,8 +717,10 @@ class BlipTextImageModelsModelTester:
         return config, input_ids, attention_mask, pixel_values
 
     def get_config(self):
-        return BlipConfig.from_text_vision_configs(
-            self.text_model_tester.get_config(), self.vision_model_tester.get_config(), projection_dim=64
+        return BlipConfig(
+            text_config=self.text_model_tester.get_config().to_dict(),
+            vision_config=self.vision_model_tester.get_config().to_dict(),
+            projection_dim=64,
         )
 
     def create_and_check_model(self, config, input_ids, attention_mask, pixel_values):
@@ -750,8 +767,10 @@ class BlipVQAModelTester:
         return config, input_ids, attention_mask, pixel_values
 
     def get_config(self):
-        return BlipConfig.from_text_vision_configs(
-            self.text_model_tester.get_config(), self.vision_model_tester.get_config(), projection_dim=64
+        return BlipConfig(
+            text_config=self.text_model_tester.get_config().to_dict(),
+            vision_config=self.vision_model_tester.get_config().to_dict(),
+            projection_dim=64,
         )
 
     def create_and_check_model(self, config, input_ids, attention_mask, pixel_values):
@@ -1037,8 +1056,8 @@ class BlipTextRetrievalModelTest(ModelTesterMixin, unittest.TestCase):
             loaded_model_state_dict = loaded_model.state_dict()
 
             non_persistent_buffers = {}
-            for key in loaded_model_state_dict.keys():
-                if key not in model_state_dict.keys():
+            for key in loaded_model_state_dict:
+                if key not in model_state_dict:
                     non_persistent_buffers[key] = loaded_model_state_dict[key]
 
             loaded_model_state_dict = {
@@ -1255,8 +1274,8 @@ class BlipTextImageModelTest(ModelTesterMixin, unittest.TestCase):
             loaded_model_state_dict = loaded_model.state_dict()
 
             non_persistent_buffers = {}
-            for key in loaded_model_state_dict.keys():
-                if key not in model_state_dict.keys():
+            for key in loaded_model_state_dict:
+                if key not in model_state_dict:
                     non_persistent_buffers[key] = loaded_model_state_dict[key]
 
             loaded_model_state_dict = {

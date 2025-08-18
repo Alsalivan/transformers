@@ -129,6 +129,8 @@ _REGULAR_SUPPORTED_MODEL_NAMES_AND_TASKS = [
     "deberta",
     "deberta-v2",
     "dinov2",
+    "dinov3_convnext",
+    "dinov3_vit",
     "distilbert",
     "donut-swin",
     "electra",
@@ -749,9 +751,7 @@ def create_wrapper(
             tracer = found_proxies[0].tracer
             if op_type == "call_function":
                 target = function
-            elif op_type == "call_method":
-                target = function.__name__
-            elif op_type == "get_attr":
+            elif op_type == "call_method" or op_type == "get_attr":
                 target = function.__name__
             else:
                 raise ValueError(f"op_type {op_type} not supported.")
@@ -815,7 +815,6 @@ def _proxies_to_metas(v):
 
 def create_cache_proxy_factory_fn(orig_cache_cls: type[Cache]) -> Callable[[Node], HFCacheProxy]:
     def cache_proxy_factory_fn(n: Node) -> HFCacheProxy:
-        global _CURRENT_TRACER
         if not isinstance(_CURRENT_TRACER, HFTracer):
             raise RuntimeError("Cannot create HFCacheProxy because there is no HFTracer currently tracing.")
         cache_proxy = HFCacheProxy(n, _CURRENT_TRACER)
@@ -1235,9 +1234,9 @@ class HFTracer(Tracer):
             root (`torch.nn.Module` or  `Callable`):
                 Either a `torch.nn.Module`` or a function to be traced through. If root is not a
                 [`~transformers.PreTrainedModel`], then `dummy_inputs` must be passed, otherwise tracing will fail.
-            concrete_args (`Dict[str, Any], *optional*):
+            concrete_args (`dict[str, Any], *optional*):
                 Concrete arguments that should not be treated as Proxies
-            dummy_inputs (`Dict[str, Any]`, *optional*):
+            dummy_inputs (`dict[str, Any]`, *optional*):
                 The dummy inputs needed to handle data-dependent control-flow if `root` is not a
                 [`~transformers.PreTrainedModel`]. It can also be used when `root` is a
                 [`~transformers.PreTrainedModel`] to specify custom dummy inputs for a subset or all the model inputs.
@@ -1448,7 +1447,7 @@ def symbolic_trace(
     Args:
         model ([`PretrainedModel`]):
             The model to trace.
-        input_names (`List[str]`, *optional*):
+        input_names (`list[str]`, *optional*):
             The names of the inputs of the traced model. If unset, model.dummy_inputs.keys() are used instead.
         disable_check (`bool`, *optional*, defaults to `False`):
             If `True`, no check is done before trying to trace the model, this is mostly usesul for debugging purposes.

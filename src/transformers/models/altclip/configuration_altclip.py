@@ -65,7 +65,7 @@ class AltCLIPTextConfig(PretrainedConfig):
             The epsilon used by the layer normalization layers.
         pad_token_id (`int`, *optional*, defaults to 1): The id of the *padding* token.
         bos_token_id (`int`, *optional*, defaults to 0): The id of the *beginning-of-sequence* token.
-        eos_token_id (`Union[int, List[int]]`, *optional*, defaults to 2):
+        eos_token_id (`Union[int, list[int]]`, *optional*, defaults to 2):
             The id of the *end-of-sequence* token. Optionally, use a list to set multiple *end-of-sequence* tokens.
         position_embedding_type (`str`, *optional*, defaults to `"absolute"`):
             Type of position embedding. Choose one of `"absolute"`, `"relative_key"`, `"relative_key_query"`. For
@@ -367,18 +367,6 @@ class AltCLIPConfig(PretrainedConfig):
         self.projection_dim = projection_dim
         self.logit_scale_init_value = logit_scale_init_value
         self.initializer_factor = 1.0
-
-    @classmethod
-    def from_text_vision_configs(cls, text_config: AltCLIPTextConfig, vision_config: AltCLIPVisionConfig, **kwargs):
-        r"""
-        Instantiate a [`AltCLIPConfig`] (or a derived class) from altclip text model configuration and altclip vision
-        model configuration.
-
-        Returns:
-            [`AltCLIPConfig`]: An instance of a configuration object
-        """
-
-        return cls(text_config=text_config.to_dict(), vision_config=vision_config.to_dict(), **kwargs)
 
 
 __all__ = ["AltCLIPTextConfig", "AltCLIPVisionConfig", "AltCLIPConfig"]
