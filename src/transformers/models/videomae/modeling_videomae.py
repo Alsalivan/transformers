@@ -18,7 +18,7 @@ import math
 import collections.abc
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, Tuple
 
 import numpy as np
 import torch
